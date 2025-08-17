@@ -8,6 +8,21 @@ import 'dart:async';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'dart:math' as math;
+
+
+// --- IMPORTANT ---
+// Before running, add the flutter_markdown package to your pubspec.yaml file:
+//
+// dependencies:
+//   flutter:
+//     sdk: flutter
+//   ...
+//   flutter_markdown: ^0.7.1
+//
+// Then run `flutter pub get` in your terminal.
+
 
 void main() {
   runApp(
@@ -79,7 +94,7 @@ class RecordingProvider with ChangeNotifier {
   Duration _duration = Duration.zero;
   Duration get duration => _duration;
 
-  double _decibelLevel = 0.0;
+  double _decibelLevel = -120.0; // Start at minimum decibels
   double get decibelLevel => _decibelLevel;
 
   RecordingProvider() {
@@ -111,7 +126,8 @@ class RecordingProvider with ChangeNotifier {
 
     _recorderSubscription = _recorder.onProgress!.listen((e) {
       _duration = e.duration;
-      _decibelLevel = e.decibels ?? 0.0;
+      // Use a default of -120 if decibels is null
+      _decibelLevel = e.decibels ?? -120.0;
       notifyListeners();
     });
     notifyListeners();
@@ -124,7 +140,7 @@ class RecordingProvider with ChangeNotifier {
     await _recorderSubscription?.cancel();
     _recorderSubscription = null;
     _duration = Duration.zero;
-    _decibelLevel = 0.0;
+    _decibelLevel = -120.0;
     notifyListeners();
   }
 
@@ -136,7 +152,7 @@ class RecordingProvider with ChangeNotifier {
     _recorderSubscription = null;
     _audioPath = null;
     _duration = Duration.zero;
-    _decibelLevel = 0.0;
+    _decibelLevel = -120.0;
     notifyListeners();
   }
 
@@ -322,7 +338,7 @@ class _HomePageState extends State<HomePage> {
                 SizedBox(
                   height: 100,
                   child: recorder.isRecording 
-                    ? RecordingVisualizer(decibelLevel: recorder.decibelLevel)
+                    ? AudioWaveformVisualizer(decibelLevel: recorder.decibelLevel)
                     : const Center(child: Text("Ready to Record", style: TextStyle(color: Colors.grey))),
                 ),
                 const Spacer(),
@@ -385,91 +401,179 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-class RecordingVisualizer extends StatelessWidget {
+// --- NEW WIDGET: Audio Waveform Visualizer ---
+class AudioWaveformVisualizer extends StatefulWidget {
   final double decibelLevel;
-  const RecordingVisualizer({super.key, required this.decibelLevel});
+  const AudioWaveformVisualizer({super.key, required this.decibelLevel});
+
+  @override
+  State<AudioWaveformVisualizer> createState() => _AudioWaveformVisualizerState();
+}
+
+class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
+  final List<double> _waveforms = [];
+  final int _maxWaveforms = 50; // Number of bars to display
+
+  @override
+  void didUpdateWidget(covariant AudioWaveformVisualizer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.decibelLevel != oldWidget.decibelLevel) {
+      setState(() {
+        // Normalize decibel level from [-120, 0] to [0, 1]
+        // Adding a small value to avoid log(0)
+        final double normalized = (widget.decibelLevel.clamp(-120.0, 0.0) + 120) / 120;
+        _waveforms.add(normalized);
+        if (_waveforms.length > _maxWaveforms) {
+          _waveforms.removeAt(0);
+        }
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final double normalized = (decibelLevel.clamp(-60.0, 0.0) + 60) / 60;
-    return Center(
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 50),
-        width: 50 + (normalized * 100),
-        height: 50 + (normalized * 100),
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.red.withOpacity(0.5),
-        ),
+    return CustomPaint(
+      painter: WaveformPainter(
+        waveforms: _waveforms,
+        color: Colors.red,
       ),
+      size: const Size(double.infinity, 100),
     );
   }
 }
 
-class NotePage extends StatelessWidget {
-  const NotePage({ super.key });
+class WaveformPainter extends CustomPainter {
+  final List<double> waveforms;
+  final Color color;
+
+  WaveformPainter({required this.waveforms, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (waveforms.isEmpty) return;
+
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    final barWidth = size.width / (waveforms.length * 2 - 1);
+    final spacing = barWidth;
+
+    for (int i = 0; i < waveforms.length; i++) {
+      final waveform = waveforms[i];
+      final barHeight = (waveform * size.height).clamp(2.0, size.height);
+      final left = i * (barWidth + spacing);
+      final top = (size.height - barHeight) / 2;
+      final rect = Rect.fromLTWH(left, top, barWidth, barHeight);
+      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(4)), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    return true;
+  }
+}
+
+
+// --- REFACTORED WIDGET: NotePage ---
+class NotePage extends StatefulWidget {
+  const NotePage({super.key});
+
+  @override
+  State<NotePage> createState() => _NotePageState();
+}
+
+class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(() {
+      if (_tabController.indexIsChanging) {
+        setState(() {
+          _currentIndex = _tabController.index;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Consumer<NoteProvider>(
       builder: (context, noteProvider, child) {
-        return DefaultTabController(
-          length: 3,
-          child: Scaffold(
-            appBar: AppBar(
-              title: const Text('Note'),
-              centerTitle: true,
-              bottom: const TabBar(
-                tabs: [
-                  Tab(text: 'Raw Transcript'),
-                  Tab(text: 'Cleaned'),
-                  Tab(text: 'Polished'),
-                ],
-                indicatorColor: Colors.red,
-                labelColor: Colors.red,
-                unselectedLabelColor: Colors.grey,
-              ),
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Note'),
+            centerTitle: true,
+            bottom: TabBar(
+              controller: _tabController,
+              tabs: const [
+                Tab(text: 'Raw Transcript'),
+                Tab(text: 'Cleaned'),
+                Tab(text: 'Polished'),
+              ],
+              indicatorColor: Colors.red,
+              labelColor: Colors.red,
+              unselectedLabelColor: Colors.grey,
             ),
-            body: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        _buildTranscriptCard(context, noteProvider.rawTranscript),
-                        _buildTranscriptCard(context, noteProvider.cleanedTranscript),
-                        _buildTranscriptCard(context, noteProvider.polishedTranscript),
-                      ],
-                    ),
+          ),
+          body: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              children: [
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildTranscriptCard(context, noteProvider.rawTranscript),
+                      _buildTranscriptCard(context, noteProvider.cleanedTranscript),
+                      // Use Markdown for the polished version
+                      _buildPolishedCard(context, noteProvider.polishedTranscript),
+                    ],
                   ),
-                  const SizedBox(height: 20),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      final tabIndex = DefaultTabController.of(context).index;
-                      String textToCopy;
-                      switch (tabIndex) {
-                        case 0: textToCopy = noteProvider.rawTranscript; break;
-                        case 1: textToCopy = noteProvider.cleanedTranscript; break;
-                        case 2: textToCopy = noteProvider.polishedTranscript; break;
-                        default: textToCopy = '';
-                      }
-                      Clipboard.setData(ClipboardData(text: textToCopy));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Transcript copied!')),
-                      );
-                    },
-                    icon: const Icon(Icons.copy),
-                    label: const Text('Copy Transcript'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                      minimumSize: const Size(double.infinity, 50),
-                    ),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    String textToCopy;
+                    switch (_currentIndex) {
+                      case 0:
+                        textToCopy = noteProvider.rawTranscript;
+                        break;
+                      case 1:
+                        textToCopy = noteProvider.cleanedTranscript;
+                        break;
+                      case 2:
+                        textToCopy = noteProvider.polishedTranscript;
+                        break;
+                      default:
+                        textToCopy = '';
+                    }
+                    Clipboard.setData(ClipboardData(text: textToCopy));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Transcript copied!')),
+                    );
+                  },
+                  icon: const Icon(Icons.copy),
+                  label: const Text('Copy Transcript'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    minimumSize: const Size(double.infinity, 50),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         );
@@ -481,7 +585,7 @@ class NotePage extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary.withOpacity(0.05),
+        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
         borderRadius: BorderRadius.circular(20),
       ),
       child: SingleChildScrollView(
@@ -492,8 +596,30 @@ class NotePage extends StatelessWidget {
       ),
     );
   }
+
+  Widget _buildPolishedCard(BuildContext context, String text) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: SingleChildScrollView(
+        child: MarkdownBody(
+          data: text,
+          styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+            p: const TextStyle(fontSize: 16, height: 1.5),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
+// --- Enum for Processing State ---
+enum ProcessingStep { transcribing, cleaning, polishing, completed }
+
+// --- REFACTORED WIDGET: TranscribePage ---
 class TranscribePage extends StatefulWidget {
   final String audioPath;
   const TranscribePage({super.key, required this.audioPath});
@@ -503,7 +629,7 @@ class TranscribePage extends StatefulWidget {
 }
 
 class _TranscribePageState extends State<TranscribePage> {
-  String _statusText = 'Initializing...';
+  ProcessingStep _currentStep = ProcessingStep.transcribing;
   bool _isProcessing = true;
   String _errorMessage = '';
 
@@ -518,7 +644,7 @@ class _TranscribePageState extends State<TranscribePage> {
     setState(() {
       _isProcessing = true;
       _errorMessage = '';
-      _statusText = 'Initializing...';
+      _currentStep = ProcessingStep.transcribing;
     });
 
     try {
@@ -527,20 +653,25 @@ class _TranscribePageState extends State<TranscribePage> {
       
       final service = TranscriptionService();
 
-      if(mounted) setState(() { _statusText = 'Transcribing...'; });
+      if(mounted) setState(() { _currentStep = ProcessingStep.transcribing; });
       final rawTranscript = await service.transcribeAudio(widget.audioPath, apiKey);
       
-      if(mounted) setState(() { _statusText = 'Cleaning up...'; });
+      if(mounted) setState(() { _currentStep = ProcessingStep.cleaning; });
       final cleanedTranscript = await service.cleanTranscript(rawTranscript, apiKey);
 
-      if(mounted) setState(() { _statusText = 'Polishing...'; });
+      if(mounted) setState(() { _currentStep = ProcessingStep.polishing; });
       final polishedNote = await service.polishNote(cleanedTranscript, apiKey);
       
+      if(mounted) setState(() { _currentStep = ProcessingStep.completed; });
+
       final result = {
         'rawTranscript': rawTranscript,
         'cleanedTranscript': cleanedTranscript,
         'polishedNote': polishedNote,
       };
+
+      // Wait a moment so the user sees the "completed" state
+      await Future.delayed(const Duration(milliseconds: 1200));
 
       if (mounted) {
         Navigator.of(context).pop(result);
@@ -572,13 +703,8 @@ class _TranscribePageState extends State<TranscribePage> {
                 ? Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const CircularProgressIndicator(),
-                      const SizedBox(height: 24),
-                      Text(
-                        _statusText,
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 16),
+                      ProcessingStepper(currentStep: _currentStep),
+                      const SizedBox(height: 40),
                       const Text(
                         'Your voice note is being processed. This might take a few moments.',
                         textAlign: TextAlign.center,
@@ -615,6 +741,92 @@ class _TranscribePageState extends State<TranscribePage> {
     );
   }
 }
+
+
+// --- NEW WIDGET: Processing Stepper ---
+class ProcessingStepper extends StatelessWidget {
+  final ProcessingStep currentStep;
+  const ProcessingStepper({super.key, required this.currentStep});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildStep(context, 'Transcribing', ProcessingStep.transcribing),
+            _buildConnector(ProcessingStep.cleaning),
+            _buildStep(context, 'Cleaning', ProcessingStep.cleaning),
+            _buildConnector(ProcessingStep.polishing),
+            _buildStep(context, 'Polishing', ProcessingStep.polishing),
+          ],
+        ),
+      ],
+    );
+  }
+
+  bool _isStepActive(ProcessingStep step) {
+    return currentStep.index >= step.index;
+  }
+
+  // --- FIXED METHOD: Added BuildContext ---
+  Widget _buildStep(BuildContext context, String title, ProcessingStep step) {
+    final isActive = _isStepActive(step);
+    final isCurrent = currentStep == step;
+    final isCompleted = currentStep.index > step.index;
+
+    Color circleColor = isActive ? Colors.green : Colors.grey.shade400;
+    Widget child = const SizedBox();
+
+    if (isCompleted) {
+      child = const Icon(Icons.check, color: Colors.white, size: 16);
+    } else if (isCurrent) {
+      child = Padding(
+        padding: const EdgeInsets.all(4.0),
+        child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.green.shade700)),
+      );
+    }
+
+    return Column(
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: circleColor,
+          ),
+          child: child,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          title,
+          style: TextStyle(
+            color: isActive ? (isDarkTheme(context) ? Colors.white : Colors.black) : Colors.grey,
+            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildConnector(ProcessingStep step) {
+    final isActive = _isStepActive(step);
+    return Expanded(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        height: 2,
+        color: isActive ? Colors.green : Colors.grey.shade400,
+        margin: const EdgeInsets.only(bottom: 28),
+      ),
+    );
+  }
+
+  bool isDarkTheme(BuildContext context) => Theme.of(context).brightness == Brightness.dark;
+}
+
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -766,13 +978,17 @@ class TranscriptionService {
     if (audioPath != null) {
       final audioFile = File(audioPath);
       final audioBytes = await audioFile.readAsBytes();
-      parts.add(DataPart('audio/aac', audioBytes));
+      parts.add(DataPart('audio/mpeg', audioBytes));
     }
 
     try {
       final response = await model.generateContent([Content.multi(parts)]);
       return response.text ?? 'Could not process request.';
     } on GenerativeAIException catch (e) {
+      // --- UPDATED ERROR HANDLING ---
+      if (e.message.contains('Unhandled format for Content')) {
+        throw Exception('There was an issue with the audio format. Please try recording again. If the problem persists, ensure the app is updated.');
+      }
       throw Exception('AI model error: ${e.message}');
     } catch (e) {
       throw Exception('An unexpected error occurred: $e');
@@ -780,16 +996,16 @@ class TranscriptionService {
   }
 
   Future<String> transcribeAudio(String audioPath, String apiKey) async {
-    return await _generateContent('Transcribe this audio file.', apiKey, audioPath: audioPath);
+    return await _generateContent('Transcribe this audio file accurately.', apiKey, audioPath: audioPath);
   }
 
   Future<String> cleanTranscript(String rawTranscript, String apiKey) async {
-    final prompt = 'Clean up this transcript by removing filler words (like "um", "uh", "like") and correcting obvious grammatical mistakes. Do not change the core meaning or add new information. Here is the transcript:\n\n$rawTranscript';
+    final prompt = 'Clean up this transcript by removing filler words (like "um", "uh", "like") and correcting obvious grammatical mistakes. Do not change the core meaning or add new information. Keep the language natural. Here is the transcript:\n\n$rawTranscript';
     return await _generateContent(prompt, apiKey);
   }
 
   Future<String> polishNote(String cleanedTranscript, String apiKey) async {
-    final prompt = 'Take this cleaned transcript and turn it into a polished, well-structured note. Use formatting like bullet points or numbered lists where appropriate to make it clear and easy to read. Here is the transcript:\n\n$cleanedTranscript';
+    final prompt = 'Take this cleaned transcript and turn it into a polished, well-structured note. Use markdown formatting like headings (e.g., "## Key Points"), bullet points (e.g., "- Point 1"), or numbered lists where appropriate to make it clear and easy to read. Identify and list any action items. Here is the transcript:\n\n$cleanedTranscript';
     return await _generateContent(prompt, apiKey);
   }
 }
