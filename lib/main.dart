@@ -5,24 +5,13 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert'; // Import for json decoding
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'dart:math' as math;
-
-
-// --- IMPORTANT ---
-// Before running, add the flutter_markdown package to your pubspec.yaml file:
-//
-// dependencies:
-//   flutter:
-//     sdk: flutter
-//   ...
-//   flutter_markdown: ^0.7.1
-//
-// Then run `flutter pub get` in your terminal.
-
+import 'dart:ui' as ui;
 
 void main() {
   runApp(
@@ -270,10 +259,31 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
   bool _noiseReduction = true;
   bool _transcription = true;
   bool _aiProcessing = true;
+  
+  late AnimationController _animationController;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.9).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+    );
+  }
+  
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
 
   String _formatDuration(Duration duration) {
     final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
@@ -296,8 +306,10 @@ class _HomePageState extends State<HomePage> {
         }
         return;
       }
+      _animationController.forward();
       await recorder.startRecording();
     } else {
+      _animationController.reverse();
       await recorder.stopRecording();
       if (recorder.audioPath != null && mounted) {
         final noteProvider = Provider.of<NoteProvider>(context, listen: false);
@@ -315,6 +327,9 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDarkMode = theme.brightness == Brightness.dark;
+
     return Consumer<RecordingProvider>(
       builder: (context, recorder, child) {
         return Scaffold(
@@ -322,54 +337,69 @@ class _HomePageState extends State<HomePage> {
             title: const Text('New Note'),
             centerTitle: true,
           ),
-          body: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              children: [
-                _buildSettingItem('Microphone', 'Built-in'),
-                _buildSwitchItem('Noise Reduction', _noiseReduction, (val) => setState(() => _noiseReduction = val)),
-                _buildSwitchItem('Transcription', _transcription, (val) => setState(() => _transcription = val)),
-                _buildSwitchItem('AI Processing', _aiProcessing, (val) => setState(() => _aiProcessing = val)),
-                const Spacer(),
-                Text(
-                  _formatDuration(recorder.duration),
-                  style: const TextStyle(fontSize: 60, fontWeight: FontWeight.w200),
-                ),
-                SizedBox(
-                  height: 100,
-                  child: recorder.isRecording 
-                    ? AudioWaveformVisualizer(decibelLevel: recorder.decibelLevel)
-                    : const Center(child: Text("Ready to Record", style: TextStyle(color: Colors.grey))),
-                ),
-                const Spacer(),
-                Column(
-                  children: [
-                    GestureDetector(
-                      onTap: () => _toggleRecording(recorder),
-                      child: Container(
-                        padding: const EdgeInsets.all(25),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.red,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.red.withOpacity(0.3),
-                              spreadRadius: 8,
-                              blurRadius: 15,
-                            )
-                          ],
+          body: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: isDarkMode
+                    ? [Colors.grey[900]!, Colors.grey[850]!]
+                    : [Colors.grey.shade100, Colors.white],
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  _buildSettingItem('Microphone', 'Built-in'),
+                  _buildSwitchItem('Noise Reduction', _noiseReduction, (val) => setState(() => _noiseReduction = val)),
+                  _buildSwitchItem('Transcription', _transcription, (val) => setState(() => _transcription = val)),
+                  _buildSwitchItem('AI Processing', _aiProcessing, (val) => setState(() => _aiProcessing = val)),
+                  const Spacer(),
+                  Text(
+                    _formatDuration(recorder.duration),
+                    style: TextStyle(fontSize: 60, fontWeight: FontWeight.w200, color: theme.colorScheme.onSurface),
+                  ),
+                  SizedBox(
+                    height: 150,
+                    child: recorder.isRecording 
+                      ? AudioWaveformVisualizer(decibelLevel: recorder.decibelLevel)
+                      : Center(child: Text("Ready to Record", style: TextStyle(color: Colors.grey.shade500, fontSize: 18))),
+                  ),
+                  const Spacer(),
+                  Column(
+                    children: [
+                      ScaleTransition(
+                        scale: _scaleAnimation,
+                        child: GestureDetector(
+                          onTap: () => _toggleRecording(recorder),
+                          child: Container(
+                            padding: const EdgeInsets.all(25),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.red,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.red.withOpacity(0.4),
+                                  spreadRadius: 10,
+                                  blurRadius: 20,
+                                )
+                              ],
+                            ),
+                            child: Icon(recorder.isRecording ? Icons.stop : Icons.mic, color: Colors.white, size: 40),
+                          ),
                         ),
-                        child: Icon(recorder.isRecording ? Icons.stop : Icons.mic, color: Colors.white, size: 40),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextButton(
-                      onPressed: recorder.isRecording ? recorder.cancelRecording : null,
-                      child: Text('Cancel', style: TextStyle(color: recorder.isRecording ? Theme.of(context).textTheme.bodyLarge?.color : Colors.grey)),
-                    ),
-                  ],
-                ),
-              ],
+                      const SizedBox(height: 24),
+                      TextButton(
+                        onPressed: recorder.isRecording ? recorder.cancelRecording : null,
+                        child: Text('Cancel', style: TextStyle(color: recorder.isRecording ? theme.textTheme.bodyLarge?.color : Colors.grey, fontSize: 16)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
             ),
           ),
         );
@@ -401,7 +431,7 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// --- NEW WIDGET: Audio Waveform Visualizer ---
+// --- UPDATED WIDGET: Audio Waveform Visualizer ---
 class AudioWaveformVisualizer extends StatefulWidget {
   final double decibelLevel;
   const AudioWaveformVisualizer({super.key, required this.decibelLevel});
@@ -410,24 +440,71 @@ class AudioWaveformVisualizer extends StatefulWidget {
   State<AudioWaveformVisualizer> createState() => _AudioWaveformVisualizerState();
 }
 
-class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
-  final List<double> _waveforms = [];
-  final int _maxWaveforms = 50; // Number of bars to display
+class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  List<double> _waveforms = [];
+  final int _maxWaveforms = 100;
+  Timer? _scrollTimer;
+  
+  // --- FIX: New variables to manage data flow ---
+  double _lastDecibel = 0.0;
+  bool _hasNewData = false;
+
+
+  @override
+  void initState() {
+    super.initState();
+    _waveforms = List.generate(_maxWaveforms, (_) => 0.0, growable: true);
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 100), // Faster animation
+    )..addListener(() {
+      setState(() {});
+    });
+    _startScrolling();
+  }
 
   @override
   void didUpdateWidget(covariant AudioWaveformVisualizer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.decibelLevel != oldWidget.decibelLevel) {
-      setState(() {
-        // Normalize decibel level from [-120, 0] to [0, 1]
-        // Adding a small value to avoid log(0)
-        final double normalized = (widget.decibelLevel.clamp(-120.0, 0.0) + 120) / 120;
-        _waveforms.add(normalized);
-        if (_waveforms.length > _maxWaveforms) {
-          _waveforms.removeAt(0);
-        }
-      });
+      
+      final double normalized = (widget.decibelLevel.clamp(-120.0, 0.0) + 120) / 120;
+      
+      // --- FIX: Store the latest value and set a flag ---
+      _lastDecibel = normalized;
+      _hasNewData = true;
+
+      _controller.forward(from: 0.0);
     }
+  }
+  
+  void _startScrolling() {
+    _scrollTimer = Timer.periodic(const Duration(milliseconds: 75), (timer) { // Slightly slower scroll
+      if (mounted) {
+        setState(() {
+          // --- FIX: Use the flag to decide what to add ---
+          if (_hasNewData) {
+             _waveforms.add(_lastDecibel);
+             _hasNewData = false; // Reset the flag
+          } else {
+            // Add a zero to create the flat line effect when there's no new data
+            _waveforms.add(0.0);
+          }
+          
+          if (_waveforms.length > _maxWaveforms) {
+            _waveforms.removeAt(0);
+          }
+        });
+      }
+    });
+  }
+  
+  @override
+  void dispose() {
+    _controller.dispose();
+    _scrollTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -435,7 +512,7 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
     return CustomPaint(
       painter: WaveformPainter(
         waveforms: _waveforms,
-        color: Colors.red,
+        animationValue: _controller.value,
       ),
       size: const Size(double.infinity, 100),
     );
@@ -444,29 +521,75 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
 
 class WaveformPainter extends CustomPainter {
   final List<double> waveforms;
-  final Color color;
+  final double animationValue;
 
-  WaveformPainter({required this.waveforms, required this.color});
+  WaveformPainter({required this.waveforms, required this.animationValue});
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (waveforms.isEmpty) return;
+    if (waveforms.length < 2) return;
 
     final paint = Paint()
-      ..color = color
+      ..shader = ui.Gradient.linear(
+        Offset(0, -size.height / 2),
+        Offset(0, size.height / 2),
+        [Colors.red.shade400, Colors.red.shade700],
+      )
       ..style = PaintingStyle.fill;
 
-    final barWidth = size.width / (waveforms.length * 2 - 1);
-    final spacing = barWidth;
+    final path = Path();
+    final barWidth = size.width / (waveforms.length - 1);
 
-    for (int i = 0; i < waveforms.length; i++) {
+    path.moveTo(0, size.height / 2);
+
+    for (int i = 0; i < waveforms.length - 1; i++) {
       final waveform = waveforms[i];
-      final barHeight = (waveform * size.height).clamp(2.0, size.height);
-      final left = i * (barWidth + spacing);
-      final top = (size.height - barHeight) / 2;
-      final rect = Rect.fromLTWH(left, top, barWidth, barHeight);
-      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(4)), paint);
+      final nextWaveform = waveforms[i + 1];
+
+      final barHeight = (waveform * size.height * 0.8).clamp(2.0, size.height);
+      final nextBarHeight = (nextWaveform * size.height * 0.8).clamp(2.0, size.height);
+
+      final x1 = i * barWidth;
+      final y1 = size.height / 2 - barHeight / 2;
+      
+      final x2 = (i + 1) * barWidth;
+      final y2 = size.height / 2 - nextBarHeight / 2;
+
+      final midX = (x1 + x2) / 2;
+      final midY = (y1 + y2) / 2;
+
+      path.quadraticBezierTo(x1, y1, midX, midY);
     }
+
+    // Draw the top part of the wave
+    final lastX = size.width;
+    final lastY = size.height / 2 - (waveforms.last * size.height * 0.8).clamp(2.0, size.height) / 2;
+    path.lineTo(lastX, lastY);
+    path.lineTo(lastX, size.height / 2);
+
+    // Mirror the path for the bottom part
+    for (int i = waveforms.length - 2; i >= 0; i--) {
+        final waveform = waveforms[i];
+        final nextWaveform = waveforms[i + 1];
+
+        final barHeight = (waveform * size.height * 0.8).clamp(2.0, size.height);
+        final nextBarHeight = (nextWaveform * size.height * 0.8).clamp(2.0, size.height);
+
+        final x1 = i * barWidth;
+        final y1 = size.height / 2 + barHeight / 2;
+        
+        final x2 = (i + 1) * barWidth;
+        final y2 = size.height / 2 + nextBarHeight / 2;
+
+        final midX = (x1 + x2) / 2;
+        final midY = (y1 + y2) / 2;
+
+        path.quadraticBezierTo(x2, y2, midX, midY);
+    }
+
+    path.close();
+
+    canvas.drawPath(path, paint);
   }
 
   @override
@@ -639,6 +762,7 @@ class _TranscribePageState extends State<TranscribePage> {
     _startProcessing();
   }
 
+  // --- MODIFIED: This method now uses the new single-call service ---
   Future<void> _startProcessing() async {
     if (!mounted) return;
     setState(() {
@@ -653,25 +777,18 @@ class _TranscribePageState extends State<TranscribePage> {
       
       final service = TranscriptionService();
 
-      if(mounted) setState(() { _currentStep = ProcessingStep.transcribing; });
-      final rawTranscript = await service.transcribeAudio(widget.audioPath, apiKey);
+      // Single API call to get all three results
+      final result = await service.processAudio(widget.audioPath, apiKey);
       
+      // Update UI stepper for a better user experience
       if(mounted) setState(() { _currentStep = ProcessingStep.cleaning; });
-      final cleanedTranscript = await service.cleanTranscript(rawTranscript, apiKey);
-
-      if(mounted) setState(() { _currentStep = ProcessingStep.polishing; });
-      final polishedNote = await service.polishNote(cleanedTranscript, apiKey);
+      await Future.delayed(const Duration(milliseconds: 400));
       
+      if(mounted) setState(() { _currentStep = ProcessingStep.polishing; });
+      await Future.delayed(const Duration(milliseconds: 400));
+
       if(mounted) setState(() { _currentStep = ProcessingStep.completed; });
-
-      final result = {
-        'rawTranscript': rawTranscript,
-        'cleanedTranscript': cleanedTranscript,
-        'polishedNote': polishedNote,
-      };
-
-      // Wait a moment so the user sees the "completed" state
-      await Future.delayed(const Duration(milliseconds: 1200));
+      await Future.delayed(const Duration(milliseconds: 600));
 
       if (mounted) {
         Navigator.of(context).pop(result);
@@ -965,47 +1082,75 @@ class _SettingsPageState extends State<SettingsPage> {
 
 // --- Services ---
 
+// --- MODIFIED: This class now makes a single, optimized API call ---
 class TranscriptionService {
   
-  Future<String> _generateContent(String prompt, String apiKey, {String? audioPath}) async {
+  // This new method replaces the three separate ones.
+  Future<Map<String, String>> processAudio(String audioPath, String apiKey) async {
     if (apiKey.isEmpty) {
       throw Exception('API Key is missing. Please add it in Settings.');
     }
-    
+
+    // Using a more capable model that is good at following JSON instructions.
     final model = GenerativeModel(model: 'gemini-2.5-pro', apiKey: apiKey);
     
-    final List<Part> parts = [TextPart(prompt)];
-    if (audioPath != null) {
-      final audioFile = File(audioPath);
-      final audioBytes = await audioFile.readAsBytes();
-      parts.add(DataPart('audio/mpeg', audioBytes));
-    }
+    // The new, comprehensive prompt asking for a JSON response.
+    final prompt = '''
+You are an AI assistant for a voice note app. Process the attached audio file and provide three distinct outputs in a single, valid JSON object.
+
+The JSON object must have these exact keys: "rawTranscript", "cleanedTranscript", and "polishedNote".
+
+1.  **rawTranscript**: Provide a direct, accurate transcription of the audio.
+2.  **cleanedTranscript**: Take the raw transcript, remove filler words (like "um", "uh"), correct obvious grammar mistakes, and fix punctuation. Do not add any new information, introductory phrases, or explanations. The output must ONLY be the cleaned text itself.
+3.  **polishedNote**: Transform the cleaned transcript into a well-structured note. Use markdown for formatting (e.g., "## Headings", "- Bullet points"). Identify key points and action items. The output must ONLY be the markdown note itself, starting directly with the content. Do not include any conversational preamble like "Here is the polished note...".
+
+Return only the raw JSON object.
+''';
+
+    final audioFile = File(audioPath);
+    final audioBytes = await audioFile.readAsBytes();
+    final parts = [
+      TextPart(prompt),
+      DataPart('audio/mpeg', audioBytes),
+    ];
 
     try {
       final response = await model.generateContent([Content.multi(parts)]);
-      return response.text ?? 'Could not process request.';
+      final responseText = response.text;
+
+      if (responseText == null) {
+        throw Exception('Received an empty response from the AI model.');
+      }
+
+      // Clean the response to ensure it's valid JSON.
+      // The model sometimes wraps the JSON in ```json ... ```.
+      final cleanedJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
+      
+      // Decode the JSON string into a Map.
+      final decodedJson = jsonDecode(cleanedJson) as Map<String, dynamic>;
+
+      // Ensure all required keys are present.
+      if (!decodedJson.containsKey('rawTranscript') || 
+          !decodedJson.containsKey('cleanedTranscript') || 
+          !decodedJson.containsKey('polishedNote')) {
+        throw Exception('The AI response is missing required data. Please try again.');
+      }
+
+      // Return the results as a strongly-typed Map.
+      return {
+        'rawTranscript': decodedJson['rawTranscript'] as String,
+        'cleanedTranscript': decodedJson['cleanedTranscript'] as String,
+        'polishedNote': decodedJson['polishedNote'] as String,
+      };
+
     } on GenerativeAIException catch (e) {
-      // --- UPDATED ERROR HANDLING ---
       if (e.message.contains('Unhandled format for Content')) {
-        throw Exception('There was an issue with the audio format. Please try recording again. If the problem persists, ensure the app is updated.');
+        throw Exception('There was an issue with the audio format. Please try recording again.');
       }
       throw Exception('AI model error: ${e.message}');
     } catch (e) {
-      throw Exception('An unexpected error occurred: $e');
+      // Catches JSON parsing errors or other unexpected issues.
+      throw Exception('An unexpected error occurred while processing the note: $e');
     }
-  }
-
-  Future<String> transcribeAudio(String audioPath, String apiKey) async {
-    return await _generateContent('Transcribe this audio file accurately.', apiKey, audioPath: audioPath);
-  }
-
-  Future<String> cleanTranscript(String rawTranscript, String apiKey) async {
-    final prompt = 'Clean up this transcript by removing filler words (like "um", "uh", "like") and correcting obvious grammatical mistakes. Do not change the core meaning or add new information. Keep the language natural. Here is the transcript:\n\n$rawTranscript';
-    return await _generateContent(prompt, apiKey);
-  }
-
-  Future<String> polishNote(String cleanedTranscript, String apiKey) async {
-    final prompt = 'Take this cleaned transcript and turn it into a polished, well-structured note. Use markdown formatting like headings (e.g., "## Key Points"), bullet points (e.g., "- Point 1"), or numbered lists where appropriate to make it clear and easy to read. Identify and list any action items. Here is the transcript:\n\n$cleanedTranscript';
-    return await _generateContent(prompt, apiKey);
   }
 }
