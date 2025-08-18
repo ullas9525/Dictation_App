@@ -65,5 +65,6 @@ Because professionals, students, and creators are always on the go. Voice notes 
 
 ---
 
-## 📄 License
-Licensed under **MIT**.
+## License
+
+This project is licensed under the MIT License. You can find the full license text in the LICENSE file.
