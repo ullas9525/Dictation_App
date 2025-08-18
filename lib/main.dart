@@ -259,13 +259,15 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
-  bool _noiseReduction = true;
-  bool _transcription = true;
-  bool _aiProcessing = true;
+class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
+  String _selectedMicrophone = 'Built-in';
+  List<String> _availableMicrophones = ['Built-in'];
   
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
+  late Animation<double> _textAnimation;
 
   @override
   void initState() {
@@ -277,11 +279,84 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     _scaleAnimation = Tween<double>(begin: 1.0, end: 0.9).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+    _pulseAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+    _textAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+    _loadAvailableMicrophones();
+  }
+
+  Future<void> _loadAvailableMicrophones() async {
+    // Note: This is a simplified implementation. In a real app, you would use
+    // platform-specific code to get actual microphone devices
+    setState(() {
+      _availableMicrophones = [
+        'Built-in',
+        'Bluetooth Headset',
+        'USB Microphone',
+        'External Mic',
+      ];
+    });
+  }
+
+  void _showMicrophoneSelector() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext context) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Select Microphone',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              ..._availableMicrophones.map((mic) => ListTile(
+                title: Text(mic),
+                leading: Radio<String>(
+                  value: mic,
+                  groupValue: _selectedMicrophone,
+                  onChanged: (String? value) {
+                    if (value != null) {
+                      setState(() {
+                        _selectedMicrophone = value;
+                      });
+                      Navigator.pop(context);
+                    }
+                  },
+                  activeColor: Colors.red,
+                ),
+                onTap: () {
+                  setState(() {
+                    _selectedMicrophone = mic;
+                  });
+                  Navigator.pop(context);
+                },
+              )).toList(),
+              const SizedBox(height: 10),
+            ],
+          ),
+        );
+      },
+    );
   }
   
   @override
   void dispose() {
     _animationController.dispose();
+    _pulseController.dispose();
     super.dispose();
   }
 
@@ -337,57 +412,65 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             title: const Text('New Note'),
             centerTitle: true,
           ),
-          body: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: isDarkMode
-                    ? [Colors.grey[900]!, Colors.grey[850]!]
-                    : [Colors.grey.shade100, Colors.white],
-              ),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  _buildSettingItem('Microphone', 'Built-in'),
-                  _buildSwitchItem('Noise Reduction', _noiseReduction, (val) => setState(() => _noiseReduction = val)),
-                  _buildSwitchItem('Transcription', _transcription, (val) => setState(() => _transcription = val)),
-                  _buildSwitchItem('AI Processing', _aiProcessing, (val) => setState(() => _aiProcessing = val)),
-                  const Spacer(),
-                  Text(
-                    _formatDuration(recorder.duration),
-                    style: TextStyle(fontSize: 60, fontWeight: FontWeight.w200, color: theme.colorScheme.onSurface),
+          body: Stack(
+            children: [
+              if (!recorder.isRecording) const ParticleBackground(),
+              Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: isDarkMode
+                        ? [Colors.grey[900]!, Colors.grey[850]!]
+                        : [Colors.grey.shade100, Colors.white],
                   ),
-                  SizedBox(
-                    height: 150,
-                    child: recorder.isRecording 
-                      ? AudioWaveformVisualizer(decibelLevel: recorder.decibelLevel)
-                      : Center(child: Text("Ready to Record", style: TextStyle(color: Colors.grey.shade500, fontSize: 18))),
-                  ),
-                  const Spacer(),
-                  Column(
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
                     children: [
-                      ScaleTransition(
-                        scale: _scaleAnimation,
-                        child: GestureDetector(
-                          onTap: () => _toggleRecording(recorder),
-                          child: Container(
-                            padding: const EdgeInsets.all(25),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.red,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.red.withOpacity(0.4),
-                                  spreadRadius: 10,
-                                  blurRadius: 20,
-                                )
-                              ],
+                      _buildMicrophoneSelector('Microphone', _selectedMicrophone),
+                      const Spacer(),
+                      Text(
+                        _formatDuration(recorder.duration),
+                        style: TextStyle(fontSize: 60, fontWeight: FontWeight.w200, color: theme.colorScheme.onSurface),
+                      ),
+                      SizedBox(
+                        height: 150,
+                        child: recorder.isRecording 
+                          ? AudioWaveformVisualizer(decibelLevel: recorder.decibelLevel)
+                          : Center(
+                              child: AnimatedBuilder(
+                                animation: _textAnimation,
+                                builder: (context, child) {
+                                  return Opacity(
+                                    opacity: _textAnimation.value,
+                                    child: Text(
+                                      "Ready to Record",
+                                      style: TextStyle(color: Colors.grey.shade500, fontSize: 18),
+                                    ),
+                                  );
+                                },
+                              ),
                             ),
-                            child: Icon(recorder.isRecording ? Icons.stop : Icons.mic, color: Colors.white, size: 40),
+                      ),
+                      const Spacer(),
+                      GestureDetector(
+                        onTap: () => _toggleRecording(recorder),
+                        child: Container(
+                          padding: const EdgeInsets.all(25),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.red,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.red.withOpacity(recorder.isRecording ? 0.4 : _pulseAnimation.value * 0.6),
+                                spreadRadius: recorder.isRecording ? 10 : 5 + 15 * _pulseAnimation.value,
+                                blurRadius: recorder.isRecording ? 20 : 10 + 30 * _pulseAnimation.value,
+                              )
+                            ],
                           ),
+                          child: Icon(recorder.isRecording ? Icons.stop : Icons.mic, color: Colors.white, size: 40),
                         ),
                       ),
                       const SizedBox(height: 24),
@@ -395,19 +478,19 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                         onPressed: recorder.isRecording ? recorder.cancelRecording : null,
                         child: Text('Cancel', style: TextStyle(color: recorder.isRecording ? theme.textTheme.bodyLarge?.color : Colors.grey, fontSize: 16)),
                       ),
+                      const SizedBox(height: 20),
                     ],
                   ),
-                  const SizedBox(height: 20),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
         );
       },
     );
   }
 
-  Widget _buildSettingItem(String title, String value) {
+  Widget _buildMicrophoneSelector(String title, String value) {
     return ListTile(
       title: Text(title),
       trailing: Row(
@@ -417,18 +500,109 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
         ],
       ),
-      onTap: () {},
+      onTap: _showMicrophoneSelector,
     );
+  }
+}
+
+class ParticleBackground extends StatefulWidget {
+  const ParticleBackground({super.key});
+
+  @override
+  State<ParticleBackground> createState() => _ParticleBackgroundState();
+}
+
+class _ParticleBackgroundState extends State<ParticleBackground> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  List<Particle> _particles = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 10),
+    )..repeat();
+    _controller.addListener(_updateParticles);
+    _generateParticles();
   }
 
-  Widget _buildSwitchItem(String title, bool value, ValueChanged<bool> onChanged) {
-    return SwitchListTile(
-      title: Text(title),
-      value: value,
-      onChanged: onChanged,
-      activeColor: Colors.red,
+  void _generateParticles() {
+    final random = math.Random();
+    _particles = List.generate(50, (_) => Particle(
+      x: random.nextDouble(),
+      y: random.nextDouble(),
+      vx: (random.nextDouble() - 0.5) * 0.002,
+      vy: (random.nextDouble() - 0.5) * 0.002,
+      size: random.nextDouble() * 4 + 2,
+      color: Colors.red.withOpacity(random.nextDouble() * 0.3 + 0.1),
+    ));
+  }
+
+  void _updateParticles() {
+    setState(() {
+      for (var particle in _particles) {
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        if (particle.x < 0 || particle.x > 1) particle.vx = -particle.vx;
+        if (particle.y < 0 || particle.y > 1) particle.vy = -particle.vy;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: ParticlePainter(particles: _particles),
+      size: Size.infinite,
     );
   }
+}
+
+class Particle {
+  double x;
+  double y;
+  double vx;
+  double vy;
+  double size;
+  Color color;
+
+  Particle({
+    required this.x,
+    required this.y,
+    required this.vx,
+    required this.vy,
+    required this.size,
+    required this.color,
+  });
+}
+
+class ParticlePainter extends CustomPainter {
+  final List<Particle> particles;
+
+  ParticlePainter({required this.particles});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint();
+    for (var particle in particles) {
+      paint.color = particle.color;
+      canvas.drawCircle(
+        Offset(particle.x * size.width, particle.y * size.height),
+        particle.size,
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
 // --- UPDATED WIDGET: Audio Waveform Visualizer ---
@@ -440,8 +614,7 @@ class AudioWaveformVisualizer extends StatefulWidget {
   State<AudioWaveformVisualizer> createState() => _AudioWaveformVisualizerState();
 }
 
-class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
+class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
   List<double> _waveforms = [];
   final int _maxWaveforms = 100;
   Timer? _scrollTimer;
@@ -455,12 +628,6 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> with 
   void initState() {
     super.initState();
     _waveforms = List.generate(_maxWaveforms, (_) => 0.0, growable: true);
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 100), // Faster animation
-    )..addListener(() {
-      setState(() {});
-    });
     _startScrolling();
   }
 
@@ -474,8 +641,6 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> with 
       // --- FIX: Store the latest value and set a flag ---
       _lastDecibel = normalized;
       _hasNewData = true;
-
-      _controller.forward(from: 0.0);
     }
   }
   
@@ -502,7 +667,6 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> with 
   
   @override
   void dispose() {
-    _controller.dispose();
     _scrollTimer?.cancel();
     super.dispose();
   }
@@ -512,7 +676,6 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> with 
     return CustomPaint(
       painter: WaveformPainter(
         waveforms: _waveforms,
-        animationValue: _controller.value,
       ),
       size: const Size(double.infinity, 100),
     );
@@ -521,9 +684,8 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> with 
 
 class WaveformPainter extends CustomPainter {
   final List<double> waveforms;
-  final double animationValue;
 
-  WaveformPainter({required this.waveforms, required this.animationValue});
+  WaveformPainter({required this.waveforms});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -593,9 +755,7 @@ class WaveformPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return true;
-  }
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
 
