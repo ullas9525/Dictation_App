@@ -829,19 +829,21 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                 ElevatedButton.icon(
                   onPressed: () {
                     String textToCopy;
-                    switch (_currentIndex) {
-                      case 0:
-                        textToCopy = noteProvider.rawTranscript;
-                        break;
-                      case 1:
-                        textToCopy = noteProvider.cleanedTranscript;
-                        break;
-                      case 2:
-                        textToCopy = noteProvider.polishedTranscript;
-                        break;
-                      default:
-                        textToCopy = '';
-                    }
+                     switch (_tabController.index) {
+                       case 0:
+                         textToCopy = noteProvider.rawTranscript;
+                         break;
+                       case 1:
+                         textToCopy = noteProvider.cleanedTranscript;
+                         break;
+                       case 2:
+                         // Remove markdown for polished version before copying
+                         textToCopy = noteProvider.polishedTranscript
+                             .replaceAll(RegExp(r'(#+\s?|\*\*|-\s?)'), '');
+                         break;
+                       default:
+                         textToCopy = '';
+                     }
                     Clipboard.setData(ClipboardData(text: textToCopy));
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Transcript copied!')),
