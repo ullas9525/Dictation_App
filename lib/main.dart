@@ -71,7 +71,7 @@ class NoteProvider with ChangeNotifier {
 class RecordingProvider with ChangeNotifier {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   StreamSubscription? _recorderSubscription;
-  
+
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
@@ -104,7 +104,7 @@ class RecordingProvider with ChangeNotifier {
 
   Future<void> startRecording() async {
     if (!_isInitialized || isRecording) return;
-    
+
     Directory tempDir = await getTemporaryDirectory();
     _audioPath = '${tempDir.path}/voice_note_${DateTime.now().millisecondsSinceEpoch}.aac';
 
@@ -124,7 +124,7 @@ class RecordingProvider with ChangeNotifier {
 
   Future<void> stopRecording() async {
     if (!_isInitialized || !isRecording) return;
-    
+
     await _recorder.stopRecorder();
     await _recorderSubscription?.cancel();
     _recorderSubscription = null;
@@ -208,7 +208,7 @@ class _MainScreenState extends State<MainScreen> {
       _selectedIndex = 1;
     });
   }
-  
+
   void _navigateToSettings() {
     setState(() {
       _selectedIndex = 2;
@@ -262,7 +262,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   String _selectedMicrophone = 'Built-in';
   List<String> _availableMicrophones = ['Built-in'];
-  
+
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
   late AnimationController _pulseController;
@@ -352,7 +352,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       },
     );
   }
-  
+
   @override
   void dispose() {
     _animationController.dispose();
@@ -437,7 +437,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       ),
                       SizedBox(
                         height: 150,
-                        child: recorder.isRecording 
+                        child: recorder.isRecording
                           ? AudioWaveformVisualizer(decibelLevel: recorder.decibelLevel)
                           : Center(
                               child: AnimatedBuilder(
@@ -618,7 +618,7 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
   List<double> _waveforms = [];
   final int _maxWaveforms = 100;
   Timer? _scrollTimer;
-  
+
   // --- FIX: New variables to manage data flow ---
   double _lastDecibel = 0.0;
   bool _hasNewData = false;
@@ -635,15 +635,15 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
   void didUpdateWidget(covariant AudioWaveformVisualizer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.decibelLevel != oldWidget.decibelLevel) {
-      
+
       final double normalized = (widget.decibelLevel.clamp(-120.0, 0.0) + 120) / 120;
-      
+
       // --- FIX: Store the latest value and set a flag ---
       _lastDecibel = normalized;
       _hasNewData = true;
     }
   }
-  
+
   void _startScrolling() {
     _scrollTimer = Timer.periodic(const Duration(milliseconds: 75), (timer) { // Slightly slower scroll
       if (mounted) {
@@ -656,7 +656,7 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
             // Add a zero to create the flat line effect when there's no new data
             _waveforms.add(0.0);
           }
-          
+
           if (_waveforms.length > _maxWaveforms) {
             _waveforms.removeAt(0);
           }
@@ -664,7 +664,7 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
       }
     });
   }
-  
+
   @override
   void dispose() {
     _scrollTimer?.cancel();
@@ -713,7 +713,7 @@ class WaveformPainter extends CustomPainter {
 
       final x1 = i * barWidth;
       final y1 = size.height / 2 - barHeight / 2;
-      
+
       final x2 = (i + 1) * barWidth;
       final y2 = size.height / 2 - nextBarHeight / 2;
 
@@ -739,7 +739,7 @@ class WaveformPainter extends CustomPainter {
 
         final x1 = i * barWidth;
         final y1 = size.height / 2 + barHeight / 2;
-        
+
         final x2 = (i + 1) * barWidth;
         final y2 = size.height / 2 + nextBarHeight / 2;
 
@@ -934,16 +934,18 @@ class _TranscribePageState extends State<TranscribePage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final apiKey = prefs.getString('apiKey') ?? '';
-      
+      final modelName = prefs.getString('modelName') ?? 'gemini-2.5-flash';
+
+
       final service = TranscriptionService();
 
       // Single API call to get all three results
-      final result = await service.processAudio(widget.audioPath, apiKey);
-      
+      final result = await service.processAudio(widget.audioPath, apiKey, modelName);
+
       // Update UI stepper for a better user experience
       if(mounted) setState(() { _currentStep = ProcessingStep.cleaning; });
       await Future.delayed(const Duration(milliseconds: 400));
-      
+
       if(mounted) setState(() { _currentStep = ProcessingStep.polishing; });
       await Future.delayed(const Duration(milliseconds: 400));
 
@@ -1114,7 +1116,8 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final _apiKeyController = TextEditingController();
-  
+  final _modelNameController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -1126,6 +1129,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) {
       setState(() {
         _apiKeyController.text = prefs.getString('apiKey') ?? '';
+        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-2.5-flash';
       });
     }
   }
@@ -1135,9 +1139,16 @@ class _SettingsPageState extends State<SettingsPage> {
     await prefs.setString('apiKey', value);
   }
 
+    Future<void> _saveModelName(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('modelName', value);
+  }
+
+
   @override
   void dispose() {
     _apiKeyController.dispose();
+    _modelNameController.dispose();
     super.dispose();
   }
 
@@ -1179,6 +1190,28 @@ class _SettingsPageState extends State<SettingsPage> {
           const Text(
             'Get your key from Google AI Studio. Your API key is stored securely on your device.',
             style: TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+          const SizedBox(height: 24),
+          _buildSectionTitle('Model Name'),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _modelNameController,
+            decoration: InputDecoration(
+              hintText: 'Enter the model name (e.g., gemini-2.5-flash)',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.save),
+                onPressed: () {
+                  _saveModelName(_modelNameController.text);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Model name saved!')),
+                  );
+                  FocusScope.of(context).unfocus();
+                },
+              ),
+            ),
           ),
           const SizedBox(height: 24),
           _buildSectionTitle('Theme'),
@@ -1244,16 +1277,16 @@ class _SettingsPageState extends State<SettingsPage> {
 
 // --- MODIFIED: This class now makes a single, optimized API call ---
 class TranscriptionService {
-  
+
   // This new method replaces the three separate ones.
-  Future<Map<String, String>> processAudio(String audioPath, String apiKey) async {
+  Future<Map<String, String>> processAudio(String audioPath, String apiKey, String modelName) async {
     if (apiKey.isEmpty) {
       throw Exception('API Key is missing. Please add it in Settings.');
     }
 
     // Using a more capable model that is good at following JSON instructions.
-    final model = GenerativeModel(model: 'gemini-2.5-pro', apiKey: apiKey);
-    
+    final model = GenerativeModel(model: modelName, apiKey: apiKey);
+
     // The new, comprehensive prompt asking for a JSON response.
     final prompt = '''
 You are an AI assistant for a voice note app. Process the attached audio file and provide three distinct outputs in a single, valid JSON object.
@@ -1285,13 +1318,13 @@ Return only the raw JSON object.
       // Clean the response to ensure it's valid JSON.
       // The model sometimes wraps the JSON in ```json ... ```.
       final cleanedJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
-      
+
       // Decode the JSON string into a Map.
       final decodedJson = jsonDecode(cleanedJson) as Map<String, dynamic>;
 
       // Ensure all required keys are present.
-      if (!decodedJson.containsKey('rawTranscript') || 
-          !decodedJson.containsKey('cleanedTranscript') || 
+      if (!decodedJson.containsKey('rawTranscript') ||
+          !decodedJson.containsKey('cleanedTranscript') ||
           !decodedJson.containsKey('polishedNote')) {
         throw Exception('The AI response is missing required data. Please try again.');
       }
