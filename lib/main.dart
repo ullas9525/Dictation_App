@@ -1169,7 +1169,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) {
       setState(() {
         _apiKeyController.text = prefs.getString('apiKey') ?? '';
-        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-1.5-flash';
+        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-2.5-flash';
       });
     }
   }
@@ -1228,7 +1228,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Get your key from Google AI Studio. Your API key is stored securely on your device.',
+            'Get your Google API key from Google AI Studio. Your API key is stored securely on your device.',
             style: TextStyle(color: Colors.grey, fontSize: 12),
           ),
           const SizedBox(height: 24),
@@ -1237,7 +1237,7 @@ class _SettingsPageState extends State<SettingsPage> {
           TextField(
             controller: _modelNameController,
             decoration: InputDecoration(
-              hintText: 'Use gemini-1.5-flash',
+              hintText: 'Use gemini-2.5-flash',
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
