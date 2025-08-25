@@ -769,18 +769,13 @@ class NotePage extends StatefulWidget {
 
 class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  int _currentIndex = 0;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(() {
-      if (_tabController.indexIsChanging) {
-        setState(() {
-          _currentIndex = _tabController.index;
-        });
-      }
+      setState(() {});
     });
   }
 
@@ -820,44 +815,63 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                     children: [
                       _buildTranscriptCard(context, noteProvider.rawTranscript),
                       _buildTranscriptCard(context, noteProvider.cleanedTranscript),
-                      // Use Markdown for the polished version
                       _buildPolishedCard(context, noteProvider.polishedTranscript),
                     ],
                   ),
                 ),
                 const SizedBox(height: 20),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    String textToCopy;
-                     switch (_tabController.index) {
-                       case 0:
-                         textToCopy = noteProvider.rawTranscript;
-                         break;
-                       case 1:
-                         textToCopy = noteProvider.cleanedTranscript;
-                         break;
-                       case 2:
-                         // Remove markdown for polished version before copying
-                         textToCopy = noteProvider.polishedTranscript
-                             .replaceAll(RegExp(r'(#+\s?|\*\*|-\s?)'), '');
-                         break;
-                       default:
-                         textToCopy = '';
-                     }
-                    Clipboard.setData(ClipboardData(text: textToCopy));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Transcript copied!')),
-                    );
-                  },
-                  icon: const Icon(Icons.copy),
-                  label: const Text('Copy Transcript'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                    minimumSize: const Size(double.infinity, 50),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16.0),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return AnimatedBuilder(
+                        animation: _tabController.animation!,
+                        builder: (context, child) {
+                          return SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            physics: const NeverScrollableScrollPhysics(),
+                            child: ClipRect( // Prevents overflow
+                              child: Transform.translate(
+                                offset: Offset(-_tabController.animation!.value * constraints.maxWidth, 0),
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: constraints.maxWidth,
+                                      child: _buildCopyButton(
+                                        context,
+                                        'Copy Raw',
+                                        noteProvider.rawTranscript,
+                                        isMarkdown: false,
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      width: constraints.maxWidth,
+                                      child: _buildCopyButton(
+                                        context,
+                                        'Copy Clean',
+                                        noteProvider.cleanedTranscript,
+                                        isMarkdown: false,
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      width: constraints.maxWidth,
+                                      child: _buildCopyButton(
+                                        context,
+                                        'Copy Polished',
+                                        noteProvider.polishedTranscript,
+                                        isMarkdown: true,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
                   ),
-                ),
+                )
               ],
             ),
           ),
@@ -865,6 +879,29 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
       },
     );
   }
+
+Widget _buildCopyButton(BuildContext context, String label, String text, {bool isMarkdown = false}) {
+    return ElevatedButton.icon(
+       onPressed: () {
+         final textToCopy = isMarkdown
+             ? text.replaceAll(RegExp(r'(#+\s?|\*\*|-\s?)'), '')
+             : text;
+         Clipboard.setData(ClipboardData(text: textToCopy));
+         ScaffoldMessenger.of(context).showSnackBar(
+           const SnackBar(content: Text('Transcript copied!')),
+         );
+       },
+       icon: const Icon(Icons.copy),
+       label: Text(label),
+       style: ElevatedButton.styleFrom(
+         backgroundColor: Colors.red,
+         foregroundColor: Colors.white,
+         shape:
+             RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+         minimumSize: const Size(double.infinity, 50),
+       ),
+     );
+   }
 
   Widget _buildTranscriptCard(BuildContext context, String text) {
     return Container(
@@ -936,7 +973,7 @@ class _TranscribePageState extends State<TranscribePage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final apiKey = prefs.getString('apiKey') ?? '';
-      final modelName = prefs.getString('modelName') ?? 'gemini-2.5-flash';
+      final modelName = prefs.getString('modelName') ?? 'gemini-1.5-flash';
 
 
       final service = TranscriptionService();
@@ -946,13 +983,10 @@ class _TranscribePageState extends State<TranscribePage> {
 
       // Update UI stepper for a better user experience
       if(mounted) setState(() { _currentStep = ProcessingStep.cleaning; });
-      await Future.delayed(const Duration(milliseconds: 400));
 
       if(mounted) setState(() { _currentStep = ProcessingStep.polishing; });
-      await Future.delayed(const Duration(milliseconds: 400));
 
       if(mounted) setState(() { _currentStep = ProcessingStep.completed; });
-      await Future.delayed(const Duration(milliseconds: 600));
 
       if (mounted) {
         Navigator.of(context).pop(result);
@@ -1131,7 +1165,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) {
       setState(() {
         _apiKeyController.text = prefs.getString('apiKey') ?? '';
-        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-2.5-flash';
+        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-1.5-flash';
       });
     }
   }
@@ -1199,7 +1233,7 @@ class _SettingsPageState extends State<SettingsPage> {
           TextField(
             controller: _modelNameController,
             decoration: InputDecoration(
-              hintText: 'Enter the model name (e.g., gemini-2.5-flash)',
+              hintText: 'Use gemini-1.5-flash',
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
