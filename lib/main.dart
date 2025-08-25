@@ -973,7 +973,7 @@ class _TranscribePageState extends State<TranscribePage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final apiKey = prefs.getString('apiKey') ?? '';
-      final modelName = prefs.getString('modelName') ?? 'gemini-1.5-flash';
+      final modelName = prefs.getString('modelName') ?? 'gemini-2.5-flash';
 
 
       final service = TranscriptionService();
@@ -983,10 +983,14 @@ class _TranscribePageState extends State<TranscribePage> {
 
       // Update UI stepper for a better user experience
       if(mounted) setState(() { _currentStep = ProcessingStep.cleaning; });
+      await Future.delayed(const Duration(milliseconds: 400));
 
       if(mounted) setState(() { _currentStep = ProcessingStep.polishing; });
+      await Future.delayed(const Duration(milliseconds: 400));
+
 
       if(mounted) setState(() { _currentStep = ProcessingStep.completed; });
+      await Future.delayed(const Duration(milliseconds: 400));
 
       if (mounted) {
         Navigator.of(context).pop(result);
