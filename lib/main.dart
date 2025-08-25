@@ -797,8 +797,8 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
               controller: _tabController,
               tabs: const [
                 Tab(text: 'Raw Transcript'),
-                Tab(text: 'Cleaned'),
-                Tab(text: 'Polished'),
+                Tab(text:'Cleaned'),
+                Tab(text: 'Polished Note'),
               ],
               indicatorColor: Colors.red,
               labelColor: Colors.red,
@@ -839,7 +839,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                                       width: constraints.maxWidth,
                                       child: _buildCopyButton(
                                         context,
-                                        'Copy Raw',
+                                        'Copy Transcript',
                                         noteProvider.rawTranscript,
                                         isMarkdown: false,
                                       ),
@@ -848,7 +848,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                                       width: constraints.maxWidth,
                                       child: _buildCopyButton(
                                         context,
-                                        'Copy Clean',
+                                        'Copy Transcript',
                                         noteProvider.cleanedTranscript,
                                         isMarkdown: false,
                                       ),
@@ -857,7 +857,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                                       width: constraints.maxWidth,
                                       child: _buildCopyButton(
                                         context,
-                                        'Copy Polished',
+                                        'Copy Transcript',
                                         noteProvider.polishedTranscript,
                                         isMarkdown: true,
                                       ),
