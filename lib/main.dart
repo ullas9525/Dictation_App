@@ -68,14 +68,23 @@ class NoteProvider with ChangeNotifier {
   }
 }
 
+// --- MODIFIED & FINAL: RecordingProvider ---
+// --- MODIFIED & FINAL: RecordingProvider with corrected timer and visualizer ---
 class RecordingProvider with ChangeNotifier {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   StreamSubscription? _recorderSubscription;
+  Timer? _durationTimer; // --- NEW: Our own reliable timer ---
 
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
+  bool _isSessionActive = false;
+  bool get isSessionActive => _isSessionActive;
+
   bool get isRecording => _recorder.isRecording;
+
+  bool _isPaused = false;
+  bool get isPaused => _isPaused;
 
   String? _audioPath;
   String? get audioPath => _audioPath;
@@ -83,7 +92,7 @@ class RecordingProvider with ChangeNotifier {
   Duration _duration = Duration.zero;
   Duration get duration => _duration;
 
-  double _decibelLevel = -120.0; // Start at minimum decibels
+  double _decibelLevel = -120.0;
   double get decibelLevel => _decibelLevel;
 
   RecordingProvider() {
@@ -93,7 +102,6 @@ class RecordingProvider with ChangeNotifier {
   Future<void> _initRecorder() async {
     final status = await Permission.microphone.request();
     if (status != PermissionStatus.granted) {
-      // Handle permission denial
       return;
     }
     await _recorder.openRecorder();
@@ -102,8 +110,17 @@ class RecordingProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  // --- NEW: A function to start our custom timer ---
+  void _startTimer() {
+    _durationTimer?.cancel(); // Cancel any existing timer
+    _durationTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+      _duration += const Duration(milliseconds: 100);
+      notifyListeners();
+    });
+  }
+
   Future<void> startRecording() async {
-    if (!_isInitialized || isRecording) return;
+    if (!_isInitialized || _isSessionActive) return;
 
     Directory tempDir = await getTemporaryDirectory();
     _audioPath = '${tempDir.path}/voice_note_${DateTime.now().millisecondsSinceEpoch}.aac';
@@ -113,46 +130,79 @@ class RecordingProvider with ChangeNotifier {
       codec: Codec.aacADTS,
     );
 
+    _duration = Duration.zero; // Reset duration
+    _startTimer(); // Start our timer
+
+    // --- MODIFIED: The listener is now ONLY for the visualizer ---
     _recorderSubscription = _recorder.onProgress!.listen((e) {
-      _duration = e.duration;
-      // Use a default of -120 if decibels is null
-      _decibelLevel = e.decibels ?? -120.0;
-      notifyListeners();
+      if (!_isPaused) {
+        _decibelLevel = e.decibels ?? -120.0;
+        notifyListeners();
+      }
     });
+
+    _isPaused = false;
+    _isSessionActive = true;
+    notifyListeners();
+  }
+
+  Future<void> pauseRecording() async {
+    if (!_isInitialized || !_isSessionActive || _isPaused) return;
+    await _recorder.pauseRecorder();
+    _isPaused = true;
+
+    _durationTimer?.cancel(); // --- NEW: Stop our timer ---
+    _decibelLevel = -120.0;
+    
+    notifyListeners();
+  }
+
+  Future<void> resumeRecording() async {
+    if (!_isInitialized || !_isSessionActive || !_isPaused) return;
+    await _recorder.resumeRecorder();
+    _isPaused = false;
+    
+    _startTimer(); // --- NEW: Restart our timer ---
     notifyListeners();
   }
 
   Future<void> stopRecording() async {
-    if (!_isInitialized || !isRecording) return;
+    if (!_isInitialized || !_isSessionActive) return;
 
     await _recorder.stopRecorder();
+    _durationTimer?.cancel(); // --- NEW: Stop our timer ---
     await _recorderSubscription?.cancel();
     _recorderSubscription = null;
     _duration = Duration.zero;
     _decibelLevel = -120.0;
+    _isPaused = false;
+    _isSessionActive = false;
     notifyListeners();
   }
 
   Future<void> cancelRecording() async {
-    if (!_isInitialized || !isRecording) return;
+    if (!_isInitialized || !_isSessionActive) return;
 
     await _recorder.stopRecorder();
+    _durationTimer?.cancel(); // --- NEW: Stop our timer ---
     await _recorderSubscription?.cancel();
     _recorderSubscription = null;
     _audioPath = null;
     _duration = Duration.zero;
     _decibelLevel = -120.0;
+    _isPaused = false;
+    _isSessionActive = false;
     notifyListeners();
   }
 
   @override
   void dispose() {
+    _durationTimer?.cancel();
     _recorderSubscription?.cancel();
     _recorder.closeRecorder();
     super.dispose();
   }
 }
-
 
 // --- Main Application Widget ---
 class VoiceNotesApp extends StatelessWidget {
@@ -366,40 +416,45 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return '$minutes:$seconds';
   }
 
-  Future<void> _toggleRecording(RecordingProvider recorder) async {
-    if (!recorder.isInitialized) return;
-
-    if (!recorder.isRecording) {
-      final prefs = await SharedPreferences.getInstance();
-      final apiKey = prefs.getString('apiKey') ?? '';
-      if (apiKey.isEmpty) {
-        if(mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: const Text('Please add your Gemini API Key in Settings first.'),
-            action: SnackBarAction(label: 'Settings', onPressed: widget.onNavigateToSettings),
-          ));
-        }
-        return;
-      }
-      _animationController.forward();
-      await recorder.startRecording();
-    } else {
-      _animationController.reverse();
-      await recorder.stopRecording();
-      if (recorder.audioPath != null && mounted) {
-        final noteProvider = Provider.of<NoteProvider>(context, listen: false);
-        final transcripts = await Navigator.push<Map<String, String>>(
-          context,
-          MaterialPageRoute(builder: (context) => TranscribePage(audioPath: recorder.audioPath!)),
-        );
-        if (transcripts != null) {
-          noteProvider.updateTranscripts(transcripts);
-          widget.onNoteProcessed();
-        }
+  // --- MODIFIED & FINAL: This method now only STOPS and processes the recording ---
+  Future<void> _stopAndProcessRecording(RecordingProvider recorder) async {
+    if (!recorder.isInitialized || !recorder.isSessionActive) return;
+    
+    _animationController.reverse();
+    await recorder.stopRecording();
+    
+    if (recorder.audioPath != null && mounted) {
+      final noteProvider = Provider.of<NoteProvider>(context, listen: false);
+      final transcripts = await Navigator.push<Map<String, String>>(
+        context,
+        MaterialPageRoute(builder: (context) => TranscribePage(audioPath: recorder.audioPath!)),
+      );
+      if (transcripts != null) {
+        noteProvider.updateTranscripts(transcripts);
+        widget.onNoteProcessed();
       }
     }
   }
 
+  Future<void> _checkApiKeyAndStart(RecordingProvider recorder) async {
+    if (!recorder.isInitialized) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final apiKey = prefs.getString('apiKey') ?? '';
+    if (apiKey.isEmpty) {
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('Please add your Gemini API Key in Settings first.'),
+          action: SnackBarAction(label: 'Settings', onPressed: widget.onNavigateToSettings),
+        ));
+      }
+      return;
+    }
+    _animationController.forward();
+    await recorder.startRecording();
+  }
+
+  // --- MODIFIED & FINAL: The build method uses the corrected logic ---
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -414,7 +469,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           ),
           body: Stack(
             children: [
-              if (!recorder.isRecording) const ParticleBackground(),
+              if (!recorder.isSessionActive) const ParticleBackground(),
               Container(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
@@ -437,7 +492,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       ),
                       SizedBox(
                         height: 150,
-                        child: recorder.isRecording
+                        child: recorder.isSessionActive
                           ? AudioWaveformVisualizer(decibelLevel: recorder.decibelLevel)
                           : Center(
                               child: AnimatedBuilder(
@@ -456,7 +511,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       ),
                       const Spacer(),
                       GestureDetector(
-                        onTap: () => _toggleRecording(recorder),
+                        // This logic is now simpler and more robust
+                        onTap: recorder.isSessionActive
+                            ? () => _stopAndProcessRecording(recorder)
+                            : () => _checkApiKeyAndStart(recorder),
                         child: Container(
                           padding: const EdgeInsets.all(25),
                           decoration: BoxDecoration(
@@ -464,19 +522,56 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                             color: Colors.red,
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.red.withOpacity(recorder.isRecording ? 0.4 : _pulseAnimation.value * 0.6),
-                                spreadRadius: recorder.isRecording ? 10 : 5 + 15 * _pulseAnimation.value,
-                                blurRadius: recorder.isRecording ? 20 : 10 + 30 * _pulseAnimation.value,
+                                color: Colors.red.withOpacity(recorder.isSessionActive ? 0.4 : _pulseAnimation.value * 0.6),
+                                spreadRadius: recorder.isSessionActive ? 10 : 5 + 15 * _pulseAnimation.value,
+                                blurRadius: recorder.isSessionActive ? 20 : 10 + 30 * _pulseAnimation.value,
                               )
                             ],
                           ),
-                          child: Icon(recorder.isRecording ? Icons.stop : Icons.mic, color: Colors.white, size: 40),
+                          child: Icon(recorder.isSessionActive ? Icons.stop : Icons.mic, color: Colors.white, size: 40),
                         ),
                       ),
                       const SizedBox(height: 24),
-                      TextButton(
-                        onPressed: recorder.isRecording ? recorder.cancelRecording : null,
-                        child: Text('Cancel', style: TextStyle(color: recorder.isRecording ? theme.textTheme.bodyLarge?.color : Colors.grey, fontSize: 16)),
+                      SizedBox(
+                        height: 48,
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 200),
+                          child: recorder.isSessionActive
+                              ? Row(
+                                  key: const ValueKey('recording_controls'),
+                                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                  children: [
+                                    TextButton.icon(
+                                      onPressed: () {
+                                        if (recorder.isPaused) {
+                                          recorder.resumeRecording();
+                                        } else {
+                                          recorder.pauseRecording();
+                                        }
+                                      },
+                                      icon: Icon(recorder.isPaused ? Icons.play_arrow : Icons.pause),
+                                      label: Text(recorder.isPaused ? 'Resume' : 'Pause'),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: theme.textTheme.bodyLarge?.color,
+                                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: recorder.cancelRecording,
+                                      child: const Text('Cancel', style: TextStyle(fontSize: 16)),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: theme.textTheme.bodyLarge?.color,
+                                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              : TextButton(
+                                  key: const ValueKey('idle_controls'),
+                                  onPressed: null,
+                                  child: const Text('Cancel', style: TextStyle(color: Colors.grey, fontSize: 16)),
+                                ),
+                        ),
                       ),
                       const SizedBox(height: 20),
                     ],
@@ -605,7 +700,6 @@ class ParticlePainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
-// --- UPDATED WIDGET: Audio Waveform Visualizer ---
 class AudioWaveformVisualizer extends StatefulWidget {
   final double decibelLevel;
   const AudioWaveformVisualizer({super.key, required this.decibelLevel});
@@ -619,7 +713,6 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
   final int _maxWaveforms = 100;
   Timer? _scrollTimer;
 
-  // --- FIX: New variables to manage data flow ---
   double _lastDecibel = 0.0;
   bool _hasNewData = false;
 
@@ -638,7 +731,6 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
 
       final double normalized = (widget.decibelLevel.clamp(-120.0, 0.0) + 120) / 120;
 
-      // --- FIX: Store the latest value and set a flag ---
       _lastDecibel = normalized;
       _hasNewData = true;
     }
@@ -648,12 +740,10 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
     _scrollTimer = Timer.periodic(const Duration(milliseconds: 75), (timer) { // Slightly slower scroll
       if (mounted) {
         setState(() {
-          // --- FIX: Use the flag to decide what to add ---
           if (_hasNewData) {
              _waveforms.add(_lastDecibel);
-             _hasNewData = false; // Reset the flag
+             _hasNewData = false;
           } else {
-            // Add a zero to create the flat line effect when there's no new data
             _waveforms.add(0.0);
           }
 
@@ -723,13 +813,11 @@ class WaveformPainter extends CustomPainter {
       path.quadraticBezierTo(x1, y1, midX, midY);
     }
 
-    // Draw the top part of the wave
     final lastX = size.width;
     final lastY = size.height / 2 - (waveforms.last * size.height * 0.8).clamp(2.0, size.height) / 2;
     path.lineTo(lastX, lastY);
     path.lineTo(lastX, size.height / 2);
 
-    // Mirror the path for the bottom part
     for (int i = waveforms.length - 2; i >= 0; i--) {
         final waveform = waveforms[i];
         final nextWaveform = waveforms[i + 1];
@@ -759,7 +847,6 @@ class WaveformPainter extends CustomPainter {
 }
 
 
-// --- REFACTORED WIDGET: NotePage ---
 class NotePage extends StatefulWidget {
   const NotePage({super.key});
 
@@ -830,7 +917,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                           return SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
                             physics: const NeverScrollableScrollPhysics(),
-                            child: ClipRect( // Prevents overflow
+                            child: ClipRect( 
                               child: Transform.translate(
                                 offset: Offset(-_tabController.animation!.value * constraints.maxWidth, 0),
                                 child: Row(
@@ -938,10 +1025,8 @@ Widget _buildCopyButton(BuildContext context, String label, String text, {bool i
   }
 }
 
-// --- Enum for Processing State ---
 enum ProcessingStep { transcribing, cleaning, polishing, completed }
 
-// --- REFACTORED WIDGET: TranscribePage ---
 class TranscribePage extends StatefulWidget {
   final String audioPath;
   const TranscribePage({super.key, required this.audioPath});
@@ -961,7 +1046,6 @@ class _TranscribePageState extends State<TranscribePage> {
     _startProcessing();
   }
 
-  // --- MODIFIED: This method now uses the new single-call service ---
   Future<void> _startProcessing() async {
     if (!mounted) return;
     setState(() {
@@ -973,15 +1057,13 @@ class _TranscribePageState extends State<TranscribePage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final apiKey = prefs.getString('apiKey') ?? '';
-      final modelName = prefs.getString('modelName') ?? 'gemini-2.5-flash';
+      final modelName = prefs.getString('modelName') ?? 'gemini-1.5-flash-latest';
 
 
       final service = TranscriptionService();
 
-      // Single API call to get all three results
       final result = await service.processAudio(widget.audioPath, apiKey, modelName);
 
-      // Update UI stepper for a better user experience
       if(mounted) setState(() { _currentStep = ProcessingStep.cleaning; });
       await Future.delayed(const Duration(milliseconds: 400));
 
@@ -1061,8 +1143,6 @@ class _TranscribePageState extends State<TranscribePage> {
   }
 }
 
-
-// --- NEW WIDGET: Processing Stepper ---
 class ProcessingStepper extends StatelessWidget {
   final ProcessingStep currentStep;
   const ProcessingStepper({super.key, required this.currentStep});
@@ -1089,7 +1169,6 @@ class ProcessingStepper extends StatelessWidget {
     return currentStep.index >= step.index;
   }
 
-  // --- FIXED METHOD: Added BuildContext ---
   Widget _buildStep(BuildContext context, String title, ProcessingStep step) {
     final isActive = _isStepActive(step);
     final isCurrent = currentStep == step;
@@ -1169,7 +1248,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) {
       setState(() {
         _apiKeyController.text = prefs.getString('apiKey') ?? '';
-        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-2.5-flash';
+        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-1.5-flash-latest';
       });
     }
   }
@@ -1237,7 +1316,7 @@ class _SettingsPageState extends State<SettingsPage> {
           TextField(
             controller: _modelNameController,
             decoration: InputDecoration(
-              hintText: 'Use gemini-2.5-flash',
+              hintText: 'Use gemini-1.5-flash-latest',
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -1315,19 +1394,14 @@ class _SettingsPageState extends State<SettingsPage> {
 
 // --- Services ---
 
-// --- MODIFIED: This class now makes a single, optimized API call ---
 class TranscriptionService {
-
-  // This new method replaces the three separate ones.
   Future<Map<String, String>> processAudio(String audioPath, String apiKey, String modelName) async {
     if (apiKey.isEmpty) {
       throw Exception('API Key is missing. Please add it in Settings.');
     }
-
-    // Using a more capable model that is good at following JSON instructions.
+    
     final model = GenerativeModel(model: modelName, apiKey: apiKey);
 
-    // The new, comprehensive prompt asking for a JSON response.
     final prompt = '''
 You are an AI assistant for a voice note app. Process the attached audio file and provide three distinct outputs in a single, valid JSON object.
 
@@ -1355,21 +1429,15 @@ Return only the raw JSON object.
         throw Exception('Received an empty response from the AI model.');
       }
 
-      // Clean the response to ensure it's valid JSON.
-      // The model sometimes wraps the JSON in ```json ... ```.
       final cleanedJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
-
-      // Decode the JSON string into a Map.
       final decodedJson = jsonDecode(cleanedJson) as Map<String, dynamic>;
 
-      // Ensure all required keys are present.
       if (!decodedJson.containsKey('rawTranscript') ||
           !decodedJson.containsKey('cleanedTranscript') ||
           !decodedJson.containsKey('polishedNote')) {
         throw Exception('The AI response is missing required data. Please try again.');
       }
 
-      // Return the results as a strongly-typed Map.
       return {
         'rawTranscript': decodedJson['rawTranscript'] as String,
         'cleanedTranscript': decodedJson['cleanedTranscript'] as String,
@@ -1382,7 +1450,6 @@ Return only the raw JSON object.
       }
       throw Exception('AI model error: ${e.message}');
     } catch (e) {
-      // Catches JSON parsing errors or other unexpected issues.
       throw Exception('An unexpected error occurred while processing the note: $e');
     }
   }
