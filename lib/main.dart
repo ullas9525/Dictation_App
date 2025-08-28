@@ -27,11 +27,9 @@ void main() {
 }
 
 // --- State Management ---
-
 class ThemeProvider with ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.light;
   ThemeMode get themeMode => _themeMode;
-
   ThemeProvider() {
     _loadTheme();
   }
@@ -55,7 +53,6 @@ class NoteProvider with ChangeNotifier {
   String _rawTranscript = 'Record a new note from the Home screen.';
   String _cleanedTranscript = 'Your cleaned note will appear here.';
   String _polishedTranscript = 'Your polished note will appear here.';
-
   String get rawTranscript => _rawTranscript;
   String get cleanedTranscript => _cleanedTranscript;
   String get polishedTranscript => _polishedTranscript;
@@ -68,33 +65,23 @@ class NoteProvider with ChangeNotifier {
   }
 }
 
-// --- MODIFIED & FINAL: RecordingProvider ---
-// --- MODIFIED & FINAL: RecordingProvider with corrected timer and visualizer ---
 class RecordingProvider with ChangeNotifier {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   StreamSubscription? _recorderSubscription;
   Timer? _durationTimer;
-
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
-
   bool _isSessionActive = false;
   bool get isSessionActive => _isSessionActive;
-
   bool get isRecording => _recorder.isRecording;
-
   bool _isPaused = false;
   bool get isPaused => _isPaused;
-
   String? _audioPath;
   String? get audioPath => _audioPath;
-
   Duration _duration = Duration.zero;
   Duration get duration => _duration;
-
   double _decibelLevel = -120.0;
   double get decibelLevel => _decibelLevel;
-
   RecordingProvider() {
     _initRecorder();
   }
@@ -118,11 +105,9 @@ class RecordingProvider with ChangeNotifier {
     });
   }
 
-  // --- NEW: Helper function to manage the decibel stream ---
   void _startDecibelSubscription() {
     _recorderSubscription?.cancel(); // Ensure no old subscriptions are running
     _recorderSubscription = _recorder.onProgress!.listen((e) {
-      // We no longer check for _isPaused here, we just manage the subscription
       _decibelLevel = e.decibels ?? -120.0;
       notifyListeners();
     });
@@ -130,34 +115,25 @@ class RecordingProvider with ChangeNotifier {
 
   Future<void> startRecording() async {
     if (!_isInitialized || _isSessionActive) return;
-
     Directory tempDir = await getTemporaryDirectory();
     _audioPath = '${tempDir.path}/voice_note_${DateTime.now().millisecondsSinceEpoch}.aac';
-
     await _recorder.startRecorder(
       toFile: _audioPath,
       codec: Codec.aacADTS,
     );
-
     _duration = Duration.zero;
     _startTimer();
     _startDecibelSubscription(); // Start listening to the visualizer stream
-
     _isPaused = false;
     _isSessionActive = true;
     notifyListeners();
   }
 
-  // In class RecordingProvider
-
   Future<void> pauseRecording() async {
   if (!_isInitialized || !_isSessionActive || _isPaused) return;
   await _recorder.pauseRecorder();
   _isPaused = true;
-
   _durationTimer?.cancel();
-  
-  // We still cancel the subscription to stop new data
   _recorderSubscription?.cancel();
   _recorderSubscription = null; 
   notifyListeners();
@@ -167,17 +143,13 @@ class RecordingProvider with ChangeNotifier {
     if (!_isInitialized || !_isSessionActive || !_isPaused) return;
     await _recorder.resumeRecorder();
     _isPaused = false;
-    
     _startTimer();
-    // FIX: Start a new stream subscription to reactivate the visualizer.
     _startDecibelSubscription(); 
-    
     notifyListeners();
   }
 
   Future<void> stopRecording() async {
     if (!_isInitialized || !_isSessionActive) return;
-
     await _recorder.stopRecorder();
     _durationTimer?.cancel();
     await _recorderSubscription?.cancel();
@@ -191,7 +163,6 @@ class RecordingProvider with ChangeNotifier {
 
   Future<void> cancelRecording() async {
     if (!_isInitialized || !_isSessionActive) return;
-
     await _recorder.stopRecorder();
     _durationTimer?.cancel();
     await _recorderSubscription?.cancel();
@@ -212,10 +183,10 @@ class RecordingProvider with ChangeNotifier {
     super.dispose();
   }
 }
+
 // --- Main Application Widget ---
 class VoiceNotesApp extends StatelessWidget {
   const VoiceNotesApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -244,17 +215,14 @@ class VoiceNotesApp extends StatelessWidget {
 }
 
 // --- Screens ---
-
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
-
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
-
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
@@ -312,7 +280,6 @@ class HomePage extends StatefulWidget {
   final VoidCallback onNoteProcessed;
   final VoidCallback onNavigateToSettings;
   const HomePage({super.key, required this.onNoteProcessed, required this.onNavigateToSettings});
-
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -320,13 +287,11 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   String _selectedMicrophone = 'Built-in';
   List<String> _availableMicrophones = ['Built-in'];
-
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   late Animation<double> _textAnimation;
-
   @override
   void initState() {
     super.initState();
@@ -351,8 +316,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   Future<void> _loadAvailableMicrophones() async {
-    // Note: This is a simplified implementation. In a real app, you would use
-    // platform-specific code to get actual microphone devices
     setState(() {
       _availableMicrophones = [
         'Built-in',
@@ -424,13 +387,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return '$minutes:$seconds';
   }
 
-  // --- MODIFIED & FINAL: This method now only STOPS and processes the recording ---
   Future<void> _stopAndProcessRecording(RecordingProvider recorder) async {
-    if (!recorder.isInitialized || !recorder.isSessionActive) return;
-    
+    if (!recorder.isInitialized || !recorder.isSessionActive) return;    
     _animationController.reverse();
     await recorder.stopRecording();
-    
     if (recorder.audioPath != null && mounted) {
       final noteProvider = Provider.of<NoteProvider>(context, listen: false);
       final transcripts = await Navigator.push<Map<String, String>>(
@@ -446,7 +406,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _checkApiKeyAndStart(RecordingProvider recorder) async {
     if (!recorder.isInitialized) return;
-
     final prefs = await SharedPreferences.getInstance();
     final apiKey = prefs.getString('apiKey') ?? '';
     if (apiKey.isEmpty) {
@@ -462,14 +421,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     await recorder.startRecording();
   }
 
-  // --- MODIFIED & FINAL: The build method uses the corrected logic ---
-  // In class _HomePageState
-
 @override
 Widget build(BuildContext context) {
   final theme = Theme.of(context);
   final isDarkMode = theme.brightness == Brightness.dark;
-
   return Consumer<RecordingProvider>(
     builder: (context, recorder, child) {
       return Scaffold(
@@ -523,23 +478,17 @@ Widget build(BuildContext context) {
                           ),
                     ),
                     const Spacer(),
-                    
-                    // --- MAJOR CHANGE START ---
-                    // This area now uses an AnimatedSwitcher to swap between the single
-                    // record button and the row of active controls.
                     AnimatedSwitcher(
                       duration: const Duration(milliseconds: 300),
                       transitionBuilder: (child, animation) {
                         return ScaleTransition(scale: animation, child: child);
                       },
                       child: recorder.isSessionActive
-                          // --- WIDGETS WHEN RECORDING ---
                           ? Row(
                               key: const ValueKey('active_controls'),
                               mainAxisAlignment: MainAxisAlignment.center,
                               crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
-                                // 1. The STOP button
                                 GestureDetector(
                                   onTap: () => _stopAndProcessRecording(recorder),
                                   child: Container(
@@ -552,9 +501,7 @@ Widget build(BuildContext context) {
                                   ),
                                 ),
                                 const SizedBox(width: 24),
-                                // 2. The PAUSE / RESUME buttons
                                 if (recorder.isPaused)
-                                  // The Resume Button
                                   IconButton(
                                     icon: const Icon(Icons.play_arrow),
                                     iconSize: 40,
@@ -562,7 +509,6 @@ Widget build(BuildContext context) {
                                     color: theme.colorScheme.onSurface,
                                   )
                                 else
-                                  // The Pause Button
                                   IconButton(
                                     icon: const Icon(Icons.pause),
                                     iconSize: 40,
@@ -571,7 +517,6 @@ Widget build(BuildContext context) {
                                   ),
                               ],
                             )
-                          // --- WIDGET WHEN IDLE ---
                           : GestureDetector(
                               key: const ValueKey('idle_button'),
                               onTap: () => _checkApiKeyAndStart(recorder),
@@ -592,10 +537,8 @@ Widget build(BuildContext context) {
                               ),
                             ),
                     ),
-                    // --- MAJOR CHANGE END ---
                     
                     const SizedBox(height: 24),
-                    // The cancel button logic remains below
                     SizedBox(
                       height: 48,
                       child: AnimatedOpacity(
@@ -610,7 +553,7 @@ Widget build(BuildContext context) {
                                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                               ),
                             )
-                          : const SizedBox(), // Show nothing when not active
+                          : const SizedBox(),
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -641,7 +584,6 @@ Widget build(BuildContext context) {
 
 class ParticleBackground extends StatefulWidget {
   const ParticleBackground({super.key});
-
   @override
   State<ParticleBackground> createState() => _ParticleBackgroundState();
 }
@@ -649,7 +591,6 @@ class ParticleBackground extends StatefulWidget {
 class _ParticleBackgroundState extends State<ParticleBackground> with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   List<Particle> _particles = [];
-
   @override
   void initState() {
     super.initState();
@@ -719,9 +660,7 @@ class Particle {
 
 class ParticlePainter extends CustomPainter {
   final List<Particle> particles;
-
   ParticlePainter({required this.particles});
-
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint();
@@ -743,7 +682,6 @@ class AudioWaveformVisualizer extends StatefulWidget {
   final double decibelLevel;
   final bool isPaused;
   const AudioWaveformVisualizer({super.key, required this.decibelLevel,this.isPaused = false, });
-  
   @override
   State<AudioWaveformVisualizer> createState() => _AudioWaveformVisualizerState();
 }
@@ -752,11 +690,8 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
   List<double> _waveforms = [];
   final int _maxWaveforms = 100;
   Timer? _scrollTimer;
-
   double _lastDecibel = 0.0;
   bool _hasNewData = false;
-
-
   @override
   void initState() {
     super.initState();
@@ -768,9 +703,7 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
   void didUpdateWidget(covariant AudioWaveformVisualizer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.decibelLevel != oldWidget.decibelLevel) {
-
       final double normalized = (widget.decibelLevel.clamp(-120.0, 0.0) + 120) / 120;
-
       _lastDecibel = normalized;
       _hasNewData = true;
     }
@@ -780,7 +713,7 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
     _scrollTimer = Timer.periodic(const Duration(milliseconds: 75), (timer) { 
       if (widget.isPaused) {
         return; 
-      }// Slightly slower scroll
+      }
       if (mounted) {
         setState(() {
           if (_hasNewData) {
@@ -789,7 +722,6 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
           } else {
             _waveforms.add(0.0);
           }
-
           if (_waveforms.length > _maxWaveforms) {
             _waveforms.removeAt(0);
           }
@@ -817,13 +749,10 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
 
 class WaveformPainter extends CustomPainter {
   final List<double> waveforms;
-
   WaveformPainter({required this.waveforms});
-
   @override
   void paint(Canvas canvas, Size size) {
     if (waveforms.length < 2) return;
-
     final paint = Paint()
       ..shader = ui.Gradient.linear(
         Offset(0, -size.height / 2),
@@ -831,28 +760,20 @@ class WaveformPainter extends CustomPainter {
         [Colors.red.shade400, Colors.red.shade700],
       )
       ..style = PaintingStyle.fill;
-
     final path = Path();
     final barWidth = size.width / (waveforms.length - 1);
-
     path.moveTo(0, size.height / 2);
-
     for (int i = 0; i < waveforms.length - 1; i++) {
       final waveform = waveforms[i];
       final nextWaveform = waveforms[i + 1];
-
       final barHeight = (waveform * size.height * 0.8).clamp(2.0, size.height);
       final nextBarHeight = (nextWaveform * size.height * 0.8).clamp(2.0, size.height);
-
       final x1 = i * barWidth;
       final y1 = size.height / 2 - barHeight / 2;
-
       final x2 = (i + 1) * barWidth;
       final y2 = size.height / 2 - nextBarHeight / 2;
-
       final midX = (x1 + x2) / 2;
       final midY = (y1 + y2) / 2;
-
       path.quadraticBezierTo(x1, y1, midX, midY);
     }
 
@@ -860,28 +781,20 @@ class WaveformPainter extends CustomPainter {
     final lastY = size.height / 2 - (waveforms.last * size.height * 0.8).clamp(2.0, size.height) / 2;
     path.lineTo(lastX, lastY);
     path.lineTo(lastX, size.height / 2);
-
     for (int i = waveforms.length - 2; i >= 0; i--) {
         final waveform = waveforms[i];
         final nextWaveform = waveforms[i + 1];
-
         final barHeight = (waveform * size.height * 0.8).clamp(2.0, size.height);
         final nextBarHeight = (nextWaveform * size.height * 0.8).clamp(2.0, size.height);
-
         final x1 = i * barWidth;
         final y1 = size.height / 2 + barHeight / 2;
-
         final x2 = (i + 1) * barWidth;
         final y2 = size.height / 2 + nextBarHeight / 2;
-
         final midX = (x1 + x2) / 2;
         final midY = (y1 + y2) / 2;
-
         path.quadraticBezierTo(x2, y2, midX, midY);
     }
-
     path.close();
-
     canvas.drawPath(path, paint);
   }
 
@@ -889,17 +802,14 @@ class WaveformPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
-
 class NotePage extends StatefulWidget {
   const NotePage({super.key});
-
   @override
   State<NotePage> createState() => _NotePageState();
 }
 
 class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-
   @override
   void initState() {
     super.initState();
@@ -1069,11 +979,9 @@ Widget _buildCopyButton(BuildContext context, String label, String text, {bool i
 }
 
 enum ProcessingStep { transcribing, cleaning, polishing, completed }
-
 class TranscribePage extends StatefulWidget {
   final String audioPath;
   const TranscribePage({super.key, required this.audioPath});
-
   @override
   State<TranscribePage> createState() => _TranscribePageState();
 }
@@ -1082,7 +990,6 @@ class _TranscribePageState extends State<TranscribePage> {
   ProcessingStep _currentStep = ProcessingStep.transcribing;
   bool _isProcessing = true;
   String _errorMessage = '';
-
   @override
   void initState() {
     super.initState();
@@ -1096,27 +1003,18 @@ class _TranscribePageState extends State<TranscribePage> {
       _errorMessage = '';
       _currentStep = ProcessingStep.transcribing;
     });
-
     try {
       final prefs = await SharedPreferences.getInstance();
       final apiKey = prefs.getString('apiKey') ?? '';
-      final modelName = prefs.getString('modelName') ?? 'gemini-1.5-flash-latest';
-
-
+      final modelName = prefs.getString('modelName') ?? 'gemini-2.5-flash';
       final service = TranscriptionService();
-
       final result = await service.processAudio(widget.audioPath, apiKey, modelName);
-
       if(mounted) setState(() { _currentStep = ProcessingStep.cleaning; });
       await Future.delayed(const Duration(milliseconds: 400));
-
       if(mounted) setState(() { _currentStep = ProcessingStep.polishing; });
       await Future.delayed(const Duration(milliseconds: 400));
-
-
       if(mounted) setState(() { _currentStep = ProcessingStep.completed; });
       await Future.delayed(const Duration(milliseconds: 400));
-
       if (mounted) {
         Navigator.of(context).pop(result);
       }
@@ -1189,7 +1087,6 @@ class _TranscribePageState extends State<TranscribePage> {
 class ProcessingStepper extends StatelessWidget {
   final ProcessingStep currentStep;
   const ProcessingStepper({super.key, required this.currentStep});
-
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -1216,10 +1113,8 @@ class ProcessingStepper extends StatelessWidget {
     final isActive = _isStepActive(step);
     final isCurrent = currentStep == step;
     final isCompleted = currentStep.index > step.index;
-
     Color circleColor = isActive ? Colors.green : Colors.grey.shade400;
     Widget child = const SizedBox();
-
     if (isCompleted) {
       child = const Icon(Icons.check, color: Colors.white, size: 16);
     } else if (isCurrent) {
@@ -1264,14 +1159,12 @@ class ProcessingStepper extends StatelessWidget {
       ),
     );
   }
-
   bool isDarkTheme(BuildContext context) => Theme.of(context).brightness == Brightness.dark;
 }
 
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
-
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
@@ -1279,7 +1172,6 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   final _apiKeyController = TextEditingController();
   final _modelNameController = TextEditingController();
-
   @override
   void initState() {
     super.initState();
@@ -1291,7 +1183,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) {
       setState(() {
         _apiKeyController.text = prefs.getString('apiKey') ?? '';
-        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-1.5-flash-latest';
+        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-2.5-flash';
       });
     }
   }
@@ -1306,7 +1198,6 @@ class _SettingsPageState extends State<SettingsPage> {
     await prefs.setString('modelName', value);
   }
 
-
   @override
   void dispose() {
     _apiKeyController.dispose();
@@ -1317,7 +1208,6 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final themeProvider = Provider.of<ThemeProvider>(context);
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Settings'),
@@ -1359,7 +1249,7 @@ class _SettingsPageState extends State<SettingsPage> {
           TextField(
             controller: _modelNameController,
             decoration: InputDecoration(
-              hintText: 'Use gemini-1.5-flash-latest',
+              hintText: 'Use gemini-2.5-flash',
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -1436,15 +1326,12 @@ class _SettingsPageState extends State<SettingsPage> {
 }
 
 // --- Services ---
-
 class TranscriptionService {
   Future<Map<String, String>> processAudio(String audioPath, String apiKey, String modelName) async {
     if (apiKey.isEmpty) {
       throw Exception('API Key is missing. Please add it in Settings.');
     }
-    
     final model = GenerativeModel(model: modelName, apiKey: apiKey);
-
     final prompt = '''
 You are an AI assistant for a voice note app. Process the attached audio file and provide three distinct outputs in a single, valid JSON object.
 
@@ -1467,14 +1354,12 @@ Return only the raw JSON object.
     try {
       final response = await model.generateContent([Content.multi(parts)]);
       final responseText = response.text;
-
       if (responseText == null) {
         throw Exception('Received an empty response from the AI model.');
       }
 
       final cleanedJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
       final decodedJson = jsonDecode(cleanedJson) as Map<String, dynamic>;
-
       if (!decodedJson.containsKey('rawTranscript') ||
           !decodedJson.containsKey('cleanedTranscript') ||
           !decodedJson.containsKey('polishedNote')) {
