@@ -73,7 +73,7 @@ class NoteProvider with ChangeNotifier {
 class RecordingProvider with ChangeNotifier {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   StreamSubscription? _recorderSubscription;
-  Timer? _durationTimer; // --- NEW: Our own reliable timer ---
+  Timer? _durationTimer;
 
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
@@ -110,11 +110,20 @@ class RecordingProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // --- NEW: A function to start our custom timer ---
   void _startTimer() {
-    _durationTimer?.cancel(); // Cancel any existing timer
+    _durationTimer?.cancel();
     _durationTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
       _duration += const Duration(milliseconds: 100);
+      notifyListeners();
+    });
+  }
+
+  // --- NEW: Helper function to manage the decibel stream ---
+  void _startDecibelSubscription() {
+    _recorderSubscription?.cancel(); // Ensure no old subscriptions are running
+    _recorderSubscription = _recorder.onProgress!.listen((e) {
+      // We no longer check for _isPaused here, we just manage the subscription
+      _decibelLevel = e.decibels ?? -120.0;
       notifyListeners();
     });
   }
@@ -130,39 +139,39 @@ class RecordingProvider with ChangeNotifier {
       codec: Codec.aacADTS,
     );
 
-    _duration = Duration.zero; // Reset duration
-    _startTimer(); // Start our timer
-
-    // --- MODIFIED: The listener is now ONLY for the visualizer ---
-    _recorderSubscription = _recorder.onProgress!.listen((e) {
-      if (!_isPaused) {
-        _decibelLevel = e.decibels ?? -120.0;
-        notifyListeners();
-      }
-    });
+    _duration = Duration.zero;
+    _startTimer();
+    _startDecibelSubscription(); // Start listening to the visualizer stream
 
     _isPaused = false;
     _isSessionActive = true;
     notifyListeners();
   }
 
-  Future<void> pauseRecording() async {
-    if (!_isInitialized || !_isSessionActive || _isPaused) return;
-    await _recorder.pauseRecorder();
-    _isPaused = true;
+  // In class RecordingProvider
 
-    _durationTimer?.cancel(); // --- NEW: Stop our timer ---
-    _decibelLevel = -120.0;
-    
-    notifyListeners();
-  }
+  Future<void> pauseRecording() async {
+  if (!_isInitialized || !_isSessionActive || _isPaused) return;
+  await _recorder.pauseRecorder();
+  _isPaused = true;
+
+  _durationTimer?.cancel();
+  
+  // We still cancel the subscription to stop new data
+  _recorderSubscription?.cancel();
+  _recorderSubscription = null; 
+  notifyListeners();
+}
 
   Future<void> resumeRecording() async {
     if (!_isInitialized || !_isSessionActive || !_isPaused) return;
     await _recorder.resumeRecorder();
     _isPaused = false;
     
-    _startTimer(); // --- NEW: Restart our timer ---
+    _startTimer();
+    // FIX: Start a new stream subscription to reactivate the visualizer.
+    _startDecibelSubscription(); 
+    
     notifyListeners();
   }
 
@@ -170,7 +179,7 @@ class RecordingProvider with ChangeNotifier {
     if (!_isInitialized || !_isSessionActive) return;
 
     await _recorder.stopRecorder();
-    _durationTimer?.cancel(); // --- NEW: Stop our timer ---
+    _durationTimer?.cancel();
     await _recorderSubscription?.cancel();
     _recorderSubscription = null;
     _duration = Duration.zero;
@@ -184,7 +193,7 @@ class RecordingProvider with ChangeNotifier {
     if (!_isInitialized || !_isSessionActive) return;
 
     await _recorder.stopRecorder();
-    _durationTimer?.cancel(); // --- NEW: Stop our timer ---
+    _durationTimer?.cancel();
     await _recorderSubscription?.cancel();
     _recorderSubscription = null;
     _audioPath = null;
@@ -203,7 +212,6 @@ class RecordingProvider with ChangeNotifier {
     super.dispose();
   }
 }
-
 // --- Main Application Widget ---
 class VoiceNotesApp extends StatelessWidget {
   const VoiceNotesApp({super.key});
@@ -455,136 +463,167 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   // --- MODIFIED & FINAL: The build method uses the corrected logic ---
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDarkMode = theme.brightness == Brightness.dark;
+  // In class _HomePageState
 
-    return Consumer<RecordingProvider>(
-      builder: (context, recorder, child) {
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('New Note'),
-            centerTitle: true,
-          ),
-          body: Stack(
-            children: [
-              if (!recorder.isSessionActive) const ParticleBackground(),
-              Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: isDarkMode
-                        ? [Colors.grey[900]!, Colors.grey[850]!]
-                        : [Colors.grey.shade100, Colors.white],
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      _buildMicrophoneSelector('Microphone', _selectedMicrophone),
-                      const Spacer(),
-                      Text(
-                        _formatDuration(recorder.duration),
-                        style: TextStyle(fontSize: 60, fontWeight: FontWeight.w200, color: theme.colorScheme.onSurface),
-                      ),
-                      SizedBox(
-                        height: 150,
-                        child: recorder.isSessionActive
-                          ? AudioWaveformVisualizer(decibelLevel: recorder.decibelLevel)
-                          : Center(
-                              child: AnimatedBuilder(
-                                animation: _textAnimation,
-                                builder: (context, child) {
-                                  return Opacity(
-                                    opacity: _textAnimation.value,
-                                    child: Text(
-                                      "Ready to Record",
-                                      style: TextStyle(color: Colors.grey.shade500, fontSize: 18),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                      ),
-                      const Spacer(),
-                      GestureDetector(
-                        // This logic is now simpler and more robust
-                        onTap: recorder.isSessionActive
-                            ? () => _stopAndProcessRecording(recorder)
-                            : () => _checkApiKeyAndStart(recorder),
-                        child: Container(
-                          padding: const EdgeInsets.all(25),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.red,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.red.withOpacity(recorder.isSessionActive ? 0.4 : _pulseAnimation.value * 0.6),
-                                spreadRadius: recorder.isSessionActive ? 10 : 5 + 15 * _pulseAnimation.value,
-                                blurRadius: recorder.isSessionActive ? 20 : 10 + 30 * _pulseAnimation.value,
-                              )
-                            ],
-                          ),
-                          child: Icon(recorder.isSessionActive ? Icons.stop : Icons.mic, color: Colors.white, size: 40),
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      SizedBox(
-                        height: 48,
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 200),
-                          child: recorder.isSessionActive
-                              ? Row(
-                                  key: const ValueKey('recording_controls'),
-                                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                                  children: [
-                                    TextButton.icon(
-                                      onPressed: () {
-                                        if (recorder.isPaused) {
-                                          recorder.resumeRecording();
-                                        } else {
-                                          recorder.pauseRecording();
-                                        }
-                                      },
-                                      icon: Icon(recorder.isPaused ? Icons.play_arrow : Icons.pause),
-                                      label: Text(recorder.isPaused ? 'Resume' : 'Pause'),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor: theme.textTheme.bodyLarge?.color,
-                                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                                      ),
-                                    ),
-                                    TextButton(
-                                      onPressed: recorder.cancelRecording,
-                                      child: const Text('Cancel', style: TextStyle(fontSize: 16)),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor: theme.textTheme.bodyLarge?.color,
-                                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                                      ),
-                                    ),
-                                  ],
-                                )
-                              : TextButton(
-                                  key: const ValueKey('idle_controls'),
-                                  onPressed: null,
-                                  child: const Text('Cancel', style: TextStyle(color: Colors.grey, fontSize: 16)),
-                                ),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                    ],
-                  ),
+@override
+Widget build(BuildContext context) {
+  final theme = Theme.of(context);
+  final isDarkMode = theme.brightness == Brightness.dark;
+
+  return Consumer<RecordingProvider>(
+    builder: (context, recorder, child) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('New Note'),
+          centerTitle: true,
+        ),
+        body: Stack(
+          children: [
+            if (!recorder.isSessionActive) const ParticleBackground(),
+            Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: isDarkMode
+                      ? [Colors.grey[900]!, Colors.grey[850]!]
+                      : [Colors.grey.shade100, Colors.white],
                 ),
               ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  children: [
+                    _buildMicrophoneSelector('Microphone', _selectedMicrophone),
+                    const Spacer(),
+                    Text(
+                      _formatDuration(recorder.duration),
+                      style: TextStyle(fontSize: 60, fontWeight: FontWeight.w200, color: theme.colorScheme.onSurface),
+                    ),
+                    SizedBox(
+                      height: 150,
+                      child: recorder.isSessionActive
+                        ? AudioWaveformVisualizer(
+                            decibelLevel: recorder.decibelLevel,
+                            isPaused: recorder.isPaused,
+                          )
+                        : Center(
+                            child: AnimatedBuilder(
+                              animation: _textAnimation,
+                              builder: (context, child) {
+                                return Opacity(
+                                  opacity: _textAnimation.value,
+                                  child: Text(
+                                    "Ready to Record",
+                                    style: TextStyle(color: Colors.grey.shade500, fontSize: 18),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                    ),
+                    const Spacer(),
+                    
+                    // --- MAJOR CHANGE START ---
+                    // This area now uses an AnimatedSwitcher to swap between the single
+                    // record button and the row of active controls.
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 300),
+                      transitionBuilder: (child, animation) {
+                        return ScaleTransition(scale: animation, child: child);
+                      },
+                      child: recorder.isSessionActive
+                          // --- WIDGETS WHEN RECORDING ---
+                          ? Row(
+                              key: const ValueKey('active_controls'),
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                // 1. The STOP button
+                                GestureDetector(
+                                  onTap: () => _stopAndProcessRecording(recorder),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(25),
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Colors.red,
+                                    ),
+                                    child: const Icon(Icons.stop, color: Colors.white, size: 40),
+                                  ),
+                                ),
+                                const SizedBox(width: 24),
+                                // 2. The PAUSE / RESUME buttons
+                                if (recorder.isPaused)
+                                  // The Resume Button
+                                  IconButton(
+                                    icon: const Icon(Icons.play_arrow),
+                                    iconSize: 40,
+                                    onPressed: recorder.resumeRecording,
+                                    color: theme.colorScheme.onSurface,
+                                  )
+                                else
+                                  // The Pause Button
+                                  IconButton(
+                                    icon: const Icon(Icons.pause),
+                                    iconSize: 40,
+                                    onPressed: recorder.pauseRecording,
+                                    color: theme.colorScheme.onSurface,
+                                  ),
+                              ],
+                            )
+                          // --- WIDGET WHEN IDLE ---
+                          : GestureDetector(
+                              key: const ValueKey('idle_button'),
+                              onTap: () => _checkApiKeyAndStart(recorder),
+                              child: Container(
+                                padding: const EdgeInsets.all(25),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.red,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.red.withOpacity(_pulseAnimation.value * 0.6),
+                                      spreadRadius: 5 + 15 * _pulseAnimation.value,
+                                      blurRadius: 10 + 30 * _pulseAnimation.value,
+                                    )
+                                  ],
+                                ),
+                                child: const Icon(Icons.mic, color: Colors.white, size: 40),
+                              ),
+                            ),
+                    ),
+                    // --- MAJOR CHANGE END ---
+                    
+                    const SizedBox(height: 24),
+                    // The cancel button logic remains below
+                    SizedBox(
+                      height: 48,
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 200),
+                        opacity: recorder.isSessionActive ? 1.0 : 0.0,
+                        child: recorder.isSessionActive 
+                          ? TextButton(
+                              onPressed: recorder.cancelRecording,
+                              child: const Text('Cancel', style: TextStyle(fontSize: 16)),
+                              style: TextButton.styleFrom(
+                                foregroundColor: theme.textTheme.bodyLarge?.color,
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                              ),
+                            )
+                          : const SizedBox(), // Show nothing when not active
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
   Widget _buildMicrophoneSelector(String title, String value) {
     return ListTile(
       title: Text(title),
@@ -702,8 +741,9 @@ class ParticlePainter extends CustomPainter {
 
 class AudioWaveformVisualizer extends StatefulWidget {
   final double decibelLevel;
-  const AudioWaveformVisualizer({super.key, required this.decibelLevel});
-
+  final bool isPaused;
+  const AudioWaveformVisualizer({super.key, required this.decibelLevel,this.isPaused = false, });
+  
   @override
   State<AudioWaveformVisualizer> createState() => _AudioWaveformVisualizerState();
 }
@@ -737,7 +777,10 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
   }
 
   void _startScrolling() {
-    _scrollTimer = Timer.periodic(const Duration(milliseconds: 75), (timer) { // Slightly slower scroll
+    _scrollTimer = Timer.periodic(const Duration(milliseconds: 75), (timer) { 
+      if (widget.isPaused) {
+        return; 
+      }// Slightly slower scroll
       if (mounted) {
         setState(() {
           if (_hasNewData) {
