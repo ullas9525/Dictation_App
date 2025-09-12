@@ -62,7 +62,6 @@ class NoteProvider with ChangeNotifier {
   String _cleanedTranscriptTranslated = '';
   String _polishedTranscriptTranslated = '';
 
-
   String get rawTranscript => _rawTranscript;
   String get cleanedTranscript => _cleanedTranscript;
   String get polishedTranscript => _polishedTranscript;
@@ -71,7 +70,6 @@ class NoteProvider with ChangeNotifier {
   String get rawTranscriptTranslated => _rawTranscriptTranslated;
   String get cleanedTranscriptTranslated => _cleanedTranscriptTranslated;
   String get polishedTranscriptTranslated => _polishedTranscriptTranslated;
-
 
   void updateTranscripts(Map<String, String> transcripts) {
     // Update original transcripts
@@ -83,7 +81,7 @@ class NoteProvider with ChangeNotifier {
     _rawTranscriptTranslated = transcripts['raw_translated'] ?? '';
     _cleanedTranscriptTranslated = transcripts['cleaned_translated'] ?? '';
     _polishedTranscriptTranslated = transcripts['polished_translated'] ?? '';
-    
+
     notifyListeners();
   }
 }
@@ -170,7 +168,7 @@ class RecordingProvider with ChangeNotifier {
     _isPaused = true;
     _durationTimer?.cancel();
     _recorderSubscription?.cancel();
-    _recorderSubscription = null; 
+    _recorderSubscription = null;
     notifyListeners();
   }
 
@@ -179,7 +177,7 @@ class RecordingProvider with ChangeNotifier {
     await _recorder.resumeRecorder();
     _isPaused = false;
     _startTimer();
-    _startDecibelSubscription(); 
+    _startDecibelSubscription();
     notifyListeners();
   }
 
@@ -218,6 +216,7 @@ class RecordingProvider with ChangeNotifier {
     super.dispose();
   }
 }
+
 // --- Main Application Widget ---
 class VoiceNotesApp extends StatelessWidget {
   const VoiceNotesApp({super.key});
@@ -281,7 +280,7 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
-      final List<Widget> widgetOptions = <Widget>[
+    final List<Widget> widgetOptions = <Widget>[
       HomePage(onNoteProcessed: _onNoteProcessed, onNavigateToSettings: _navigateToSettings),
       const NotePage(),
       const SettingsPage(),
@@ -387,28 +386,30 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
-              ..._availableMicrophones.map((mic) => ListTile(
-                title: Text(mic),
-                leading: Radio<String>(
-                  value: mic,
-                  groupValue: _selectedMicrophone,
-                  onChanged: (String? value) {
-                    if (value != null) {
-                      setState(() {
-                        _selectedMicrophone = value;
-                      });
-                      Navigator.pop(context);
-                    }
-                  },
-                  activeColor: Colors.red,
-                ),
-                onTap: () {
-                  setState(() {
-                    _selectedMicrophone = mic;
-                  });
-                  Navigator.pop(context);
-                },
-              )).toList(),
+              ..._availableMicrophones
+                  .map((mic) => ListTile(
+                        title: Text(mic),
+                        leading: Radio<String>(
+                          value: mic,
+                          groupValue: _selectedMicrophone,
+                          onChanged: (String? value) {
+                            if (value != null) {
+                              setState(() {
+                                _selectedMicrophone = value;
+                              });
+                              Navigator.pop(context);
+                            }
+                          },
+                          activeColor: Colors.red,
+                        ),
+                        onTap: () {
+                          setState(() {
+                            _selectedMicrophone = mic;
+                          });
+                          Navigator.pop(context);
+                        },
+                      ))
+                  .toList(),
               const SizedBox(height: 10),
             ],
           ),
@@ -432,10 +433,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _stopAndProcessRecording(RecordingProvider recorder) async {
     if (!recorder.isInitialized || !recorder.isSessionActive) return;
-    
+
     _animationController.reverse();
     await recorder.stopRecording();
-    
+
     if (recorder.audioPath != null && mounted) {
       final noteProvider = Provider.of<NoteProvider>(context, listen: false);
       final transcripts = await Navigator.push<Map<String, String>>(
@@ -455,7 +456,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     final prefs = await SharedPreferences.getInstance();
     final apiKey = prefs.getString('apiKey') ?? '';
     if (apiKey.isEmpty) {
-      if(mounted) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: const Text('Please add your Gemini API Key in Settings first.'),
           action: SnackBarAction(label: 'Settings', onPressed: widget.onNavigateToSettings),
@@ -487,9 +488,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: isDarkMode
-                        ? [Colors.grey[900]!, Colors.grey[850]!]
-                        : [Colors.grey.shade100, Colors.white],
+                    colors: isDarkMode ? [Colors.grey[900]!, Colors.grey[850]!] : [Colors.grey.shade100, Colors.white],
                   ),
                 ),
                 child: Padding(
@@ -505,24 +504,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       SizedBox(
                         height: 150,
                         child: recorder.isSessionActive
-                          ? AudioWaveformVisualizer(
-                              decibelLevel: recorder.decibelLevel,
-                              isPaused: recorder.isPaused,
-                            )
-                          : Center(
-                              child: AnimatedBuilder(
-                                animation: _textAnimation,
-                                builder: (context, child) {
-                                  return Opacity(
-                                    opacity: _textAnimation.value,
-                                    child: Text(
-                                      "Ready to Record",
-                                      style: TextStyle(color: Colors.grey.shade500, fontSize: 18),
-                                    ),
-                                  );
-                                },
+                            ? AudioWaveformVisualizer(
+                                decibelLevel: recorder.decibelLevel,
+                                isPaused: recorder.isPaused,
+                              )
+                            : Center(
+                                child: AnimatedBuilder(
+                                  animation: _textAnimation,
+                                  builder: (context, child) {
+                                    return Opacity(
+                                      opacity: _textAnimation.value,
+                                      child: Text(
+                                        "Ready to Record",
+                                        style: TextStyle(color: Colors.grey.shade500, fontSize: 18),
+                                      ),
+                                    );
+                                  },
+                                ),
                               ),
-                            ),
                       ),
                       const Spacer(),
                       AnimatedSwitcher(
@@ -590,16 +589,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                         child: AnimatedOpacity(
                           duration: const Duration(milliseconds: 200),
                           opacity: recorder.isSessionActive ? 1.0 : 0.0,
-                          child: recorder.isSessionActive 
-                            ? TextButton(
-                                onPressed: recorder.cancelRecording,
-                                child: const Text('Cancel', style: TextStyle(fontSize: 16)),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: theme.textTheme.bodyLarge?.color,
-                                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                                ),
-                              )
-                            : const SizedBox(),
+                          child: recorder.isSessionActive
+                              ? TextButton(
+                                  onPressed: recorder.cancelRecording,
+                                  child: const Text('Cancel', style: TextStyle(fontSize: 16)),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: theme.textTheme.bodyLarge?.color,
+                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                  ),
+                                )
+                              : const SizedBox(),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -613,6 +612,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       },
     );
   }
+
   Widget _buildMicrophoneSelector(String title, String value) {
     return ListTile(
       title: Text(title),
@@ -652,14 +652,16 @@ class _ParticleBackgroundState extends State<ParticleBackground> with SingleTick
 
   void _generateParticles() {
     final random = math.Random();
-    _particles = List.generate(50, (_) => Particle(
-      x: random.nextDouble(),
-      y: random.nextDouble(),
-      vx: (random.nextDouble() - 0.5) * 0.002,
-      vy: (random.nextDouble() - 0.5) * 0.002,
-      size: random.nextDouble() * 4 + 2,
-      color: Colors.red.withOpacity(random.nextDouble() * 0.3 + 0.1),
-    ));
+    _particles = List.generate(
+        50,
+        (_) => Particle(
+              x: random.nextDouble(),
+              y: random.nextDouble(),
+              vx: (random.nextDouble() - 0.5) * 0.002,
+              vy: (random.nextDouble() - 0.5) * 0.002,
+              size: random.nextDouble() * 4 + 2,
+              color: Colors.red.withOpacity(random.nextDouble() * 0.3 + 0.1),
+            ));
   }
 
   void _updateParticles() {
@@ -728,12 +730,15 @@ class ParticlePainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
-
 class AudioWaveformVisualizer extends StatefulWidget {
   final double decibelLevel;
   final bool isPaused;
-  const AudioWaveformVisualizer({super.key, required this.decibelLevel,this.isPaused = false, });
-  
+  const AudioWaveformVisualizer({
+    super.key,
+    required this.decibelLevel,
+    this.isPaused = false,
+  });
+
   @override
   State<AudioWaveformVisualizer> createState() => _AudioWaveformVisualizerState();
 }
@@ -746,7 +751,6 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
   double _lastDecibel = 0.0;
   bool _hasNewData = false;
 
-
   @override
   void initState() {
     super.initState();
@@ -758,7 +762,6 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
   void didUpdateWidget(covariant AudioWaveformVisualizer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.decibelLevel != oldWidget.decibelLevel) {
-
       final double normalized = (widget.decibelLevel.clamp(-120.0, 0.0) + 120) / 120;
 
       _lastDecibel = normalized;
@@ -767,15 +770,15 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
   }
 
   void _startScrolling() {
-    _scrollTimer = Timer.periodic(const Duration(milliseconds: 75), (timer) { 
+    _scrollTimer = Timer.periodic(const Duration(milliseconds: 75), (timer) {
       if (widget.isPaused) {
-        return; 
+        return;
       }
       if (mounted) {
         setState(() {
           if (_hasNewData) {
-             _waveforms.add(_lastDecibel);
-             _hasNewData = false;
+            _waveforms.add(_lastDecibel);
+            _hasNewData = false;
           } else {
             _waveforms.add(0.0);
           }
@@ -852,22 +855,22 @@ class WaveformPainter extends CustomPainter {
     path.lineTo(lastX, size.height / 2);
 
     for (int i = waveforms.length - 2; i >= 0; i--) {
-        final waveform = waveforms[i];
-        final nextWaveform = waveforms[i + 1];
+      final waveform = waveforms[i];
+      final nextWaveform = waveforms[i + 1];
 
-        final barHeight = (waveform * size.height * 0.8).clamp(2.0, size.height);
-        final nextBarHeight = (nextWaveform * size.height * 0.8).clamp(2.0, size.height);
+      final barHeight = (waveform * size.height * 0.8).clamp(2.0, size.height);
+      final nextBarHeight = (nextWaveform * size.height * 0.8).clamp(2.0, size.height);
 
-        final x1 = i * barWidth;
-        final y1 = size.height / 2 + barHeight / 2;
+      final x1 = i * barWidth;
+      final y1 = size.height / 2 + barHeight / 2;
 
-        final x2 = (i + 1) * barWidth;
-        final y2 = size.height / 2 + nextBarHeight / 2;
+      final x2 = (i + 1) * barWidth;
+      final y2 = size.height / 2 + nextBarHeight / 2;
 
-        final midX = (x1 + x2) / 2;
-        final midY = (y1 + y2) / 2;
+      final midX = (x1 + x2) / 2;
+      final midY = (y1 + y2) / 2;
 
-        path.quadraticBezierTo(x2, y2, midX, midY);
+      path.quadraticBezierTo(x2, y2, midX, midY);
     }
 
     path.close();
@@ -878,7 +881,6 @@ class WaveformPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
-
 
 class NotePage extends StatefulWidget {
   const NotePage({super.key});
@@ -891,7 +893,6 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
   late TabController _tabController;
   // --- NEW: State for showing translated text ---
   bool _showTranslated = false;
-
 
   @override
   void initState() {
@@ -929,13 +930,13 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                     children: [
                       Text(_showTranslated ? "Translated" : "Original"),
                       Switch(
-                          value: _showTranslated,
-                          onChanged: (value) {
-                            setState(() {
-                              _showTranslated = value;
-                            });
-                          },
-                          activeColor: Colors.red,
+                        value: _showTranslated,
+                        onChanged: (value) {
+                          setState(() {
+                            _showTranslated = value;
+                          });
+                        },
+                        activeColor: Colors.red,
                       ),
                     ],
                   ),
@@ -945,7 +946,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
               controller: _tabController,
               tabs: const [
                 Tab(text: 'Raw Transcript'),
-                Tab(text:'Cleaned'),
+                Tab(text: 'Cleaned'),
                 Tab(text: 'Polished Note'),
               ],
               indicatorColor: Colors.red,
@@ -962,9 +963,15 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                     controller: _tabController,
                     children: [
                       // --- MODIFIED: Show text based on toggle state ---
-                      _buildTranscriptCard(context, _showTranslated ? noteProvider.rawTranscriptTranslated : noteProvider.rawTranscript),
-                      _buildTranscriptCard(context, _showTranslated ? noteProvider.cleanedTranscriptTranslated : noteProvider.cleanedTranscript),
-                      _buildPolishedCard(context, _showTranslated ? noteProvider.polishedTranscriptTranslated : noteProvider.polishedTranscript),
+                      _buildTranscriptCard(
+                          context, _showTranslated ? noteProvider.rawTranscriptTranslated : noteProvider.rawTranscript),
+                      _buildTranscriptCard(context,
+                          _showTranslated ? noteProvider.cleanedTranscriptTranslated : noteProvider.cleanedTranscript),
+                      _buildPolishedCard(
+                          context,
+                          _showTranslated
+                              ? noteProvider.polishedTranscriptTranslated
+                              : noteProvider.polishedTranscript),
                     ],
                   ),
                 ),
@@ -979,7 +986,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                           return SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
                             physics: const NeverScrollableScrollPhysics(),
-                            child: ClipRect( 
+                            child: ClipRect(
                               child: Transform.translate(
                                 offset: Offset(-_tabController.animation!.value * constraints.maxWidth, 0),
                                 child: Row(
@@ -989,7 +996,9 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                                       child: _buildCopyButton(
                                         context,
                                         'Copy Transcript',
-                                        _showTranslated ? noteProvider.rawTranscriptTranslated : noteProvider.rawTranscript,
+                                        _showTranslated
+                                            ? noteProvider.rawTranscriptTranslated
+                                            : noteProvider.rawTranscript,
                                         isMarkdown: false,
                                       ),
                                     ),
@@ -998,7 +1007,9 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                                       child: _buildCopyButton(
                                         context,
                                         'Copy Transcript',
-                                        _showTranslated ? noteProvider.cleanedTranscriptTranslated : noteProvider.cleanedTranscript,
+                                        _showTranslated
+                                            ? noteProvider.cleanedTranscriptTranslated
+                                            : noteProvider.cleanedTranscript,
                                         isMarkdown: false,
                                       ),
                                     ),
@@ -1007,7 +1018,9 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                                       child: _buildCopyButton(
                                         context,
                                         'Copy Transcript',
-                                        _showTranslated ? noteProvider.polishedTranscriptTranslated : noteProvider.polishedTranscript,
+                                        _showTranslated
+                                            ? noteProvider.polishedTranscriptTranslated
+                                            : noteProvider.polishedTranscript,
                                         isMarkdown: true,
                                       ),
                                     ),
@@ -1030,27 +1043,24 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
   }
 
   Widget _buildCopyButton(BuildContext context, String label, String text, {bool isMarkdown = false}) {
-      return ElevatedButton.icon(
-        onPressed: () {
-          final textToCopy = isMarkdown
-              ? text.replaceAll(RegExp(r'(#+\s?|\*\*|-\s?)'), '')
-              : text;
-          Clipboard.setData(ClipboardData(text: textToCopy));
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Transcript copied!')),
-          );
-        },
-        icon: const Icon(Icons.copy),
-        label: Text(label),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.red,
-          foregroundColor: Colors.white,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-          minimumSize: const Size(double.infinity, 50),
-        ),
-      );
-    }
+    return ElevatedButton.icon(
+      onPressed: () {
+        final textToCopy = isMarkdown ? text.replaceAll(RegExp(r'(#+\s?|\*\*|-\s?)'), '') : text;
+        Clipboard.setData(ClipboardData(text: textToCopy));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Transcript copied!')),
+        );
+      },
+      icon: const Icon(Icons.copy),
+      label: Text(label),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.red,
+        foregroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+        minimumSize: const Size(double.infinity, 50),
+      ),
+    );
+  }
 
   Widget _buildTranscriptCard(BuildContext context, String text) {
     return Container(
@@ -1120,7 +1130,9 @@ class _TranscribePageState extends State<TranscribePage> {
       // Simulate the "Uploading" phase for better UX
       await Future.delayed(const Duration(milliseconds: 500));
       if (!mounted) return;
-      setState(() { _currentStep = ProcessingStep.processing; });
+      setState(() {
+        _currentStep = ProcessingStep.processing;
+      });
 
       final prefs = await SharedPreferences.getInstance();
       final apiKey = prefs.getString('apiKey') ?? '';
@@ -1128,7 +1140,7 @@ class _TranscribePageState extends State<TranscribePage> {
       final isTranslationEnabled = prefs.getBool('isTranslationEnabled') ?? false;
       final targetLanguage = prefs.getString('targetLanguage') ?? 'English';
       final service = TranscriptionService();
-      
+
       // Both transcription and translation happen under the "Processing" step
       final originalResults = await service.processAudio(widget.audioPath, apiKey, modelName);
       Map<String, String> finalResults = Map.from(originalResults);
@@ -1145,18 +1157,22 @@ class _TranscribePageState extends State<TranscribePage> {
 
       // Move to the "Downloading" phase
       if (!mounted) return;
-      setState(() { _currentStep = ProcessingStep.downloading; });
+      setState(() {
+        _currentStep = ProcessingStep.downloading;
+      });
       await Future.delayed(const Duration(milliseconds: 500));
-      
+
       if (!mounted) return;
-      setState(() { _currentStep = ProcessingStep.completed; });
+      setState(() {
+        _currentStep = ProcessingStep.completed;
+      });
       await Future.delayed(const Duration(milliseconds: 400));
 
       if (mounted) {
         Navigator.of(context).pop(finalResults);
       }
     } catch (e) {
-      if(mounted) {
+      if (mounted) {
         setState(() {
           _isProcessing = false;
           _errorMessage = e.toString().replaceFirst('Exception: ', '');
@@ -1182,6 +1198,19 @@ class _TranscribePageState extends State<TranscribePage> {
                 ? Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 500),
+                        transitionBuilder: (child, animation) {
+                          return FadeTransition(
+                            opacity: animation,
+                            child: ScaleTransition(scale: animation, child: child),
+                          );
+                        },
+                        child: _currentStep == ProcessingStep.processing
+                            ? const AiBrainAnimation(key: ValueKey('brain'))
+                            : const SizedBox(height: 150, key: ValueKey('placeholder')),
+                      ),
+                      const SizedBox(height: 20),
                       ProcessingStepper(currentStep: _currentStep),
                       const SizedBox(height: 40),
                       const Text(
@@ -1282,7 +1311,9 @@ class ProcessingStepper extends StatelessWidget {
         Text(
           title,
           style: TextStyle(
-            color: isActive ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black) : Colors.grey,
+            color: isActive
+                ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black)
+                : Colors.grey,
             fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
           ),
         ),
@@ -1304,7 +1335,6 @@ class ProcessingStepper extends StatelessWidget {
   }
 }
 
-
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -1319,8 +1349,17 @@ class _SettingsPageState extends State<SettingsPage> {
   // --- NEW STATE VARIABLES ---
   bool _isTranslationEnabled = false;
   String _selectedLanguage = 'English';
-  final List<String> _supportedLanguages = ['Kannada', 'English', 'Telugu', 'Tamil', 'Hindi', 'Spanish', 'French', 'German', 'Japanese'];
-
+  final List<String> _supportedLanguages = [
+    'Kannada',
+    'English',
+    'Telugu',
+    'Tamil',
+    'Hindi',
+    'Spanish',
+    'French',
+    'German',
+    'Japanese'
+  ];
 
   @override
   void initState() {
@@ -1349,12 +1388,11 @@ class _SettingsPageState extends State<SettingsPage> {
     await prefs.setBool('isTranslationEnabled', _isTranslationEnabled);
     await prefs.setString('targetLanguage', _selectedLanguage);
     if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Settings saved!')),
-        );
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Settings saved!')),
+      );
     }
   }
-
 
   @override
   void dispose() {
@@ -1415,7 +1453,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
           ),
-          
+
           // --- NEW TRANSLATION SECTION ---
           const SizedBox(height: 24),
           _buildSectionTitle('Translation'),
@@ -1532,7 +1570,7 @@ class TranscriptionService {
     if (apiKey.isEmpty) {
       throw Exception('API Key is missing. Please add it in Settings.');
     }
-    
+
     final model = GenerativeModel(model: modelName, apiKey: apiKey);
 
     final prompt = '''
@@ -1576,7 +1614,6 @@ Return only the raw JSON object.
         'cleanedTranscript': decodedJson['cleanedTranscript'] as String,
         'polishedNote': decodedJson['polishedNote'] as String,
       };
-
     } on GenerativeAIException catch (e) {
       if (e.message.contains('Unhandled format for Content')) {
         throw Exception('There was an issue with the audio format. Please try recording again.');
@@ -1628,7 +1665,124 @@ Do not add any explanations or conversational text. Return only the raw JSON obj
         'polished_translated': decodedJson['polished_translated'] as String? ?? '',
       };
     } catch (e) {
-       throw Exception('An unexpected error occurred during translation: $e');
+      throw Exception('An unexpected error occurred during translation: $e');
     }
   }
+}
+
+// --- NEW AI BRAIN ANIMATION WIDGET ---
+
+class AiBrainAnimation extends StatefulWidget {
+  const AiBrainAnimation({super.key});
+
+  @override
+  State<AiBrainAnimation> createState() => _AiBrainAnimationState();
+}
+
+class _AiBrainAnimationState extends State<AiBrainAnimation> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 4),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return CustomPaint(
+          painter: BrainPainter(progress: _controller.value),
+          size: const Size(200, 150),
+        );
+      },
+    );
+  }
+}
+
+class BrainPainter extends CustomPainter {
+  final double progress;
+  final List<Offset> neurons;
+  final List<List<int>> connections;
+  final math.Random random;
+
+  BrainPainter({required this.progress})
+      : random = math.Random(1), // Seeded for consistent patterns
+        neurons = List.generate(15, (i) {
+          final r = math.Random(i);
+          return Offset(r.nextDouble() * 200, r.nextDouble() * 150);
+        }),
+        connections = [] {
+    _generateConnections();
+  }
+
+  void _generateConnections() {
+    for (int i = 0; i < neurons.length; i++) {
+      for (int j = i + 1; j < neurons.length; j++) {
+        // Connect nodes that are reasonably close
+        if ((neurons[i] - neurons[j]).distance < 80 && random.nextDouble() > 0.5) {
+          connections.add([i, j]);
+        }
+      }
+    }
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final synapsePaint = Paint()
+      ..color = Colors.green.withOpacity(0.2)
+      ..strokeWidth = 1.0;
+
+    final neuronPaint = Paint()..color = Colors.green.withOpacity(0.8);
+
+    final glowPaint = Paint()
+      ..color = Colors.green.withOpacity(0.5)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+
+    final pulsePaint = Paint()
+      ..color = Colors.white
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+
+    // 1. Draw connections (synapses)
+    for (var connection in connections) {
+      canvas.drawLine(neurons[connection[0]], neurons[connection[1]], synapsePaint);
+    }
+
+    // 2. Draw neurons and glowing effects
+    for (int i = 0; i < neurons.length; i++) {
+      // Make different neurons glow based on time
+      final wave = math.sin(progress * 2 * math.pi + (i * math.pi / 4));
+      if (wave > 0.5) {
+        canvas.drawCircle(neurons[i], 10 + wave * 4, glowPaint);
+      }
+      canvas.drawCircle(neurons[i], 4, neuronPaint);
+    }
+
+    // 3. Draw traveling pulses
+    final pulseCount = (connections.length / 4).floor();
+    for (int i = 0; i < pulseCount; i++) {
+      final connectionIndex = (i + (progress * pulseCount).floor()) % connections.length;
+      final connection = connections[connectionIndex];
+      final start = neurons[connection[0]];
+      final end = neurons[connection[1]];
+
+      // Animate the pulse along the line
+      final pulsePosition = Offset.lerp(start, end, (progress * 2) % 1.0)!;
+      canvas.drawCircle(pulsePosition, 3, pulsePaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant BrainPainter oldDelegate) => progress != oldDelegate.progress;
 }
