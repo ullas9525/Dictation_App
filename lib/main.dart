@@ -52,24 +52,42 @@ class ThemeProvider with ChangeNotifier {
 }
 
 class NoteProvider with ChangeNotifier {
+  // Original
   String _rawTranscript = 'Record a new note from the Home screen.';
   String _cleanedTranscript = 'Your cleaned note will appear here.';
   String _polishedTranscript = 'Your polished note will appear here.';
+
+  // --- NEW: Translated Texts ---
+  String _rawTranscriptTranslated = '';
+  String _cleanedTranscriptTranslated = '';
+  String _polishedTranscriptTranslated = '';
+
 
   String get rawTranscript => _rawTranscript;
   String get cleanedTranscript => _cleanedTranscript;
   String get polishedTranscript => _polishedTranscript;
 
+  // --- NEW: Getters for Translated Texts ---
+  String get rawTranscriptTranslated => _rawTranscriptTranslated;
+  String get cleanedTranscriptTranslated => _cleanedTranscriptTranslated;
+  String get polishedTranscriptTranslated => _polishedTranscriptTranslated;
+
+
   void updateTranscripts(Map<String, String> transcripts) {
+    // Update original transcripts
     _rawTranscript = transcripts['rawTranscript'] ?? 'No raw transcript available.';
     _cleanedTranscript = transcripts['cleanedTranscript'] ?? 'No cleaned transcript available.';
     _polishedTranscript = transcripts['polishedNote'] ?? 'No polished note available.';
+
+    // --- NEW: Update translated transcripts IF they exist in the map ---
+    _rawTranscriptTranslated = transcripts['raw_translated'] ?? '';
+    _cleanedTranscriptTranslated = transcripts['cleaned_translated'] ?? '';
+    _polishedTranscriptTranslated = transcripts['polished_translated'] ?? '';
+    
     notifyListeners();
   }
 }
 
-// --- MODIFIED & FINAL: RecordingProvider ---
-// --- MODIFIED & FINAL: RecordingProvider with corrected timer and visualizer ---
 class RecordingProvider with ChangeNotifier {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   StreamSubscription? _recorderSubscription;
@@ -118,11 +136,9 @@ class RecordingProvider with ChangeNotifier {
     });
   }
 
-  // --- NEW: Helper function to manage the decibel stream ---
   void _startDecibelSubscription() {
-    _recorderSubscription?.cancel(); // Ensure no old subscriptions are running
+    _recorderSubscription?.cancel();
     _recorderSubscription = _recorder.onProgress!.listen((e) {
-      // We no longer check for _isPaused here, we just manage the subscription
       _decibelLevel = e.decibels ?? -120.0;
       notifyListeners();
     });
@@ -141,43 +157,34 @@ class RecordingProvider with ChangeNotifier {
 
     _duration = Duration.zero;
     _startTimer();
-    _startDecibelSubscription(); // Start listening to the visualizer stream
+    _startDecibelSubscription();
 
     _isPaused = false;
     _isSessionActive = true;
     notifyListeners();
   }
 
-  // In class RecordingProvider
-
   Future<void> pauseRecording() async {
-  if (!_isInitialized || !_isSessionActive || _isPaused) return;
-  await _recorder.pauseRecorder();
-  _isPaused = true;
-
-  _durationTimer?.cancel();
-  
-  // We still cancel the subscription to stop new data
-  _recorderSubscription?.cancel();
-  _recorderSubscription = null; 
-  notifyListeners();
-}
+    if (!_isInitialized || !_isSessionActive || _isPaused) return;
+    await _recorder.pauseRecorder();
+    _isPaused = true;
+    _durationTimer?.cancel();
+    _recorderSubscription?.cancel();
+    _recorderSubscription = null; 
+    notifyListeners();
+  }
 
   Future<void> resumeRecording() async {
     if (!_isInitialized || !_isSessionActive || !_isPaused) return;
     await _recorder.resumeRecorder();
     _isPaused = false;
-    
     _startTimer();
-    // FIX: Start a new stream subscription to reactivate the visualizer.
     _startDecibelSubscription(); 
-    
     notifyListeners();
   }
 
   Future<void> stopRecording() async {
     if (!_isInitialized || !_isSessionActive) return;
-
     await _recorder.stopRecorder();
     _durationTimer?.cancel();
     await _recorderSubscription?.cancel();
@@ -191,7 +198,6 @@ class RecordingProvider with ChangeNotifier {
 
   Future<void> cancelRecording() async {
     if (!_isInitialized || !_isSessionActive) return;
-
     await _recorder.stopRecorder();
     _durationTimer?.cancel();
     await _recorderSubscription?.cancel();
@@ -424,7 +430,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return '$minutes:$seconds';
   }
 
-  // --- MODIFIED & FINAL: This method now only STOPS and processes the recording ---
   Future<void> _stopAndProcessRecording(RecordingProvider recorder) async {
     if (!recorder.isInitialized || !recorder.isSessionActive) return;
     
@@ -462,168 +467,152 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     await recorder.startRecording();
   }
 
-  // --- MODIFIED & FINAL: The build method uses the corrected logic ---
-  // In class _HomePageState
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDarkMode = theme.brightness == Brightness.dark;
 
-@override
-Widget build(BuildContext context) {
-  final theme = Theme.of(context);
-  final isDarkMode = theme.brightness == Brightness.dark;
-
-  return Consumer<RecordingProvider>(
-    builder: (context, recorder, child) {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('New Note'),
-          centerTitle: true,
-        ),
-        body: Stack(
-          children: [
-            if (!recorder.isSessionActive) const ParticleBackground(),
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: isDarkMode
-                      ? [Colors.grey[900]!, Colors.grey[850]!]
-                      : [Colors.grey.shade100, Colors.white],
+    return Consumer<RecordingProvider>(
+      builder: (context, recorder, child) {
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('New Note'),
+            centerTitle: true,
+          ),
+          body: Stack(
+            children: [
+              if (!recorder.isSessionActive) const ParticleBackground(),
+              Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: isDarkMode
+                        ? [Colors.grey[900]!, Colors.grey[850]!]
+                        : [Colors.grey.shade100, Colors.white],
+                  ),
                 ),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    _buildMicrophoneSelector('Microphone', _selectedMicrophone),
-                    const Spacer(),
-                    Text(
-                      _formatDuration(recorder.duration),
-                      style: TextStyle(fontSize: 60, fontWeight: FontWeight.w200, color: theme.colorScheme.onSurface),
-                    ),
-                    SizedBox(
-                      height: 150,
-                      child: recorder.isSessionActive
-                        ? AudioWaveformVisualizer(
-                            decibelLevel: recorder.decibelLevel,
-                            isPaused: recorder.isPaused,
-                          )
-                        : Center(
-                            child: AnimatedBuilder(
-                              animation: _textAnimation,
-                              builder: (context, child) {
-                                return Opacity(
-                                  opacity: _textAnimation.value,
-                                  child: Text(
-                                    "Ready to Record",
-                                    style: TextStyle(color: Colors.grey.shade500, fontSize: 18),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                    ),
-                    const Spacer(),
-                    
-                    // --- MAJOR CHANGE START ---
-                    // This area now uses an AnimatedSwitcher to swap between the single
-                    // record button and the row of active controls.
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 300),
-                      transitionBuilder: (child, animation) {
-                        return ScaleTransition(scale: animation, child: child);
-                      },
-                      child: recorder.isSessionActive
-                          // --- WIDGETS WHEN RECORDING ---
-                          ? Row(
-                              key: const ValueKey('active_controls'),
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                // 1. The STOP button
-                                GestureDetector(
-                                  onTap: () => _stopAndProcessRecording(recorder),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(25),
-                                    decoration: const BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: Colors.red,
-                                    ),
-                                    child: const Icon(Icons.stop, color: Colors.white, size: 40),
-                                  ),
-                                ),
-                                const SizedBox(width: 24),
-                                // 2. The PAUSE / RESUME buttons
-                                if (recorder.isPaused)
-                                  // The Resume Button
-                                  IconButton(
-                                    icon: const Icon(Icons.play_arrow),
-                                    iconSize: 40,
-                                    onPressed: recorder.resumeRecording,
-                                    color: theme.colorScheme.onSurface,
-                                  )
-                                else
-                                  // The Pause Button
-                                  IconButton(
-                                    icon: const Icon(Icons.pause),
-                                    iconSize: 40,
-                                    onPressed: recorder.pauseRecording,
-                                    color: theme.colorScheme.onSurface,
-                                  ),
-                              ],
-                            )
-                          // --- WIDGET WHEN IDLE ---
-                          : GestureDetector(
-                              key: const ValueKey('idle_button'),
-                              onTap: () => _checkApiKeyAndStart(recorder),
-                              child: Container(
-                                padding: const EdgeInsets.all(25),
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Colors.red,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.red.withOpacity(_pulseAnimation.value * 0.6),
-                                      spreadRadius: 5 + 15 * _pulseAnimation.value,
-                                      blurRadius: 10 + 30 * _pulseAnimation.value,
-                                    )
-                                  ],
-                                ),
-                                child: const Icon(Icons.mic, color: Colors.white, size: 40),
-                              ),
-                            ),
-                    ),
-                    // --- MAJOR CHANGE END ---
-                    
-                    const SizedBox(height: 24),
-                    // The cancel button logic remains below
-                    SizedBox(
-                      height: 48,
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 200),
-                        opacity: recorder.isSessionActive ? 1.0 : 0.0,
-                        child: recorder.isSessionActive 
-                          ? TextButton(
-                              onPressed: recorder.cancelRecording,
-                              child: const Text('Cancel', style: TextStyle(fontSize: 16)),
-                              style: TextButton.styleFrom(
-                                foregroundColor: theme.textTheme.bodyLarge?.color,
-                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                              ),
-                            )
-                          : const SizedBox(), // Show nothing when not active
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    children: [
+                      _buildMicrophoneSelector('Microphone', _selectedMicrophone),
+                      const Spacer(),
+                      Text(
+                        _formatDuration(recorder.duration),
+                        style: TextStyle(fontSize: 60, fontWeight: FontWeight.w200, color: theme.colorScheme.onSurface),
                       ),
-                    ),
-                    const SizedBox(height: 20),
-                  ],
+                      SizedBox(
+                        height: 150,
+                        child: recorder.isSessionActive
+                          ? AudioWaveformVisualizer(
+                              decibelLevel: recorder.decibelLevel,
+                              isPaused: recorder.isPaused,
+                            )
+                          : Center(
+                              child: AnimatedBuilder(
+                                animation: _textAnimation,
+                                builder: (context, child) {
+                                  return Opacity(
+                                    opacity: _textAnimation.value,
+                                    child: Text(
+                                      "Ready to Record",
+                                      style: TextStyle(color: Colors.grey.shade500, fontSize: 18),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                      ),
+                      const Spacer(),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 300),
+                        transitionBuilder: (child, animation) {
+                          return ScaleTransition(scale: animation, child: child);
+                        },
+                        child: recorder.isSessionActive
+                            ? Row(
+                                key: const ValueKey('active_controls'),
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  GestureDetector(
+                                    onTap: () => _stopAndProcessRecording(recorder),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(25),
+                                      decoration: const BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: Colors.red,
+                                      ),
+                                      child: const Icon(Icons.stop, color: Colors.white, size: 40),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 24),
+                                  if (recorder.isPaused)
+                                    IconButton(
+                                      icon: const Icon(Icons.play_arrow),
+                                      iconSize: 40,
+                                      onPressed: recorder.resumeRecording,
+                                      color: theme.colorScheme.onSurface,
+                                    )
+                                  else
+                                    IconButton(
+                                      icon: const Icon(Icons.pause),
+                                      iconSize: 40,
+                                      onPressed: recorder.pauseRecording,
+                                      color: theme.colorScheme.onSurface,
+                                    ),
+                                ],
+                              )
+                            : GestureDetector(
+                                key: const ValueKey('idle_button'),
+                                onTap: () => _checkApiKeyAndStart(recorder),
+                                child: Container(
+                                  padding: const EdgeInsets.all(25),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.red,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.red.withOpacity(_pulseAnimation.value * 0.6),
+                                        spreadRadius: 5 + 15 * _pulseAnimation.value,
+                                        blurRadius: 10 + 30 * _pulseAnimation.value,
+                                      )
+                                    ],
+                                  ),
+                                  child: const Icon(Icons.mic, color: Colors.white, size: 40),
+                                ),
+                              ),
+                      ),
+                      const SizedBox(height: 24),
+                      SizedBox(
+                        height: 48,
+                        child: AnimatedOpacity(
+                          duration: const Duration(milliseconds: 200),
+                          opacity: recorder.isSessionActive ? 1.0 : 0.0,
+                          child: recorder.isSessionActive 
+                            ? TextButton(
+                                onPressed: recorder.cancelRecording,
+                                child: const Text('Cancel', style: TextStyle(fontSize: 16)),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: theme.textTheme.bodyLarge?.color,
+                                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                ),
+                              )
+                            : const SizedBox(),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
-        ),
-      );
-    },
-  );
-}
+            ],
+          ),
+        );
+      },
+    );
+  }
   Widget _buildMicrophoneSelector(String title, String value) {
     return ListTile(
       title: Text(title),
@@ -739,6 +728,7 @@ class ParticlePainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
+
 class AudioWaveformVisualizer extends StatefulWidget {
   final double decibelLevel;
   final bool isPaused;
@@ -780,7 +770,7 @@ class _AudioWaveformVisualizerState extends State<AudioWaveformVisualizer> {
     _scrollTimer = Timer.periodic(const Duration(milliseconds: 75), (timer) { 
       if (widget.isPaused) {
         return; 
-      }// Slightly slower scroll
+      }
       if (mounted) {
         setState(() {
           if (_hasNewData) {
@@ -899,13 +889,16 @@ class NotePage extends StatefulWidget {
 
 class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  // --- NEW: State for showing translated text ---
+  bool _showTranslated = false;
+
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(() {
-      setState(() {});
+      if (mounted) setState(() {});
     });
   }
 
@@ -915,14 +908,39 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
     super.dispose();
   }
 
+  // --- MODIFIED: The entire build method for the new UI ---
   @override
   Widget build(BuildContext context) {
     return Consumer<NoteProvider>(
       builder: (context, noteProvider, child) {
+        // --- NEW: Check if translated content exists ---
+        final bool hasTranslation = noteProvider.rawTranscriptTranslated.isNotEmpty;
+
         return Scaffold(
           appBar: AppBar(
             title: const Text('Note'),
             centerTitle: true,
+            // --- NEW: Add toggle switch to actions if translation is available ---
+            actions: [
+              if (hasTranslation)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8.0),
+                  child: Row(
+                    children: [
+                      Text(_showTranslated ? "Translated" : "Original"),
+                      Switch(
+                          value: _showTranslated,
+                          onChanged: (value) {
+                            setState(() {
+                              _showTranslated = value;
+                            });
+                          },
+                          activeColor: Colors.red,
+                      ),
+                    ],
+                  ),
+                ),
+            ],
             bottom: TabBar(
               controller: _tabController,
               tabs: const [
@@ -943,9 +961,10 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                   child: TabBarView(
                     controller: _tabController,
                     children: [
-                      _buildTranscriptCard(context, noteProvider.rawTranscript),
-                      _buildTranscriptCard(context, noteProvider.cleanedTranscript),
-                      _buildPolishedCard(context, noteProvider.polishedTranscript),
+                      // --- MODIFIED: Show text based on toggle state ---
+                      _buildTranscriptCard(context, _showTranslated ? noteProvider.rawTranscriptTranslated : noteProvider.rawTranscript),
+                      _buildTranscriptCard(context, _showTranslated ? noteProvider.cleanedTranscriptTranslated : noteProvider.cleanedTranscript),
+                      _buildPolishedCard(context, _showTranslated ? noteProvider.polishedTranscriptTranslated : noteProvider.polishedTranscript),
                     ],
                   ),
                 ),
@@ -970,7 +989,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                                       child: _buildCopyButton(
                                         context,
                                         'Copy Transcript',
-                                        noteProvider.rawTranscript,
+                                        _showTranslated ? noteProvider.rawTranscriptTranslated : noteProvider.rawTranscript,
                                         isMarkdown: false,
                                       ),
                                     ),
@@ -979,7 +998,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                                       child: _buildCopyButton(
                                         context,
                                         'Copy Transcript',
-                                        noteProvider.cleanedTranscript,
+                                        _showTranslated ? noteProvider.cleanedTranscriptTranslated : noteProvider.cleanedTranscript,
                                         isMarkdown: false,
                                       ),
                                     ),
@@ -988,7 +1007,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                                       child: _buildCopyButton(
                                         context,
                                         'Copy Transcript',
-                                        noteProvider.polishedTranscript,
+                                        _showTranslated ? noteProvider.polishedTranscriptTranslated : noteProvider.polishedTranscript,
                                         isMarkdown: true,
                                       ),
                                     ),
@@ -1010,28 +1029,28 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
     );
   }
 
-Widget _buildCopyButton(BuildContext context, String label, String text, {bool isMarkdown = false}) {
-    return ElevatedButton.icon(
-       onPressed: () {
-         final textToCopy = isMarkdown
-             ? text.replaceAll(RegExp(r'(#+\s?|\*\*|-\s?)'), '')
-             : text;
-         Clipboard.setData(ClipboardData(text: textToCopy));
-         ScaffoldMessenger.of(context).showSnackBar(
-           const SnackBar(content: Text('Transcript copied!')),
-         );
-       },
-       icon: const Icon(Icons.copy),
-       label: Text(label),
-       style: ElevatedButton.styleFrom(
-         backgroundColor: Colors.red,
-         foregroundColor: Colors.white,
-         shape:
-             RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-         minimumSize: const Size(double.infinity, 50),
-       ),
-     );
-   }
+  Widget _buildCopyButton(BuildContext context, String label, String text, {bool isMarkdown = false}) {
+      return ElevatedButton.icon(
+        onPressed: () {
+          final textToCopy = isMarkdown
+              ? text.replaceAll(RegExp(r'(#+\s?|\*\*|-\s?)'), '')
+              : text;
+          Clipboard.setData(ClipboardData(text: textToCopy));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Transcript copied!')),
+          );
+        },
+        icon: const Icon(Icons.copy),
+        label: Text(label),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.red,
+          foregroundColor: Colors.white,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+          minimumSize: const Size(double.infinity, 50),
+        ),
+      );
+    }
 
   Widget _buildTranscriptCard(BuildContext context, String text) {
     return Container(
@@ -1068,7 +1087,7 @@ Widget _buildCopyButton(BuildContext context, String label, String text, {bool i
   }
 }
 
-enum ProcessingStep { transcribing, cleaning, polishing, completed }
+enum ProcessingStep { transcribing, cleaning, polishing, translating, completed }
 
 class TranscribePage extends StatefulWidget {
   final String audioPath;
@@ -1100,25 +1119,42 @@ class _TranscribePageState extends State<TranscribePage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final apiKey = prefs.getString('apiKey') ?? '';
-      final modelName = prefs.getString('modelName') ?? 'gemini-1.5-flash-latest';
-
+      final modelName = prefs.getString('modelName') ?? 'gemini-2.5-flash';
+      
+      // --- NEW: Check if translation is enabled in settings ---
+      final isTranslationEnabled = prefs.getBool('isTranslationEnabled') ?? false;
+      final targetLanguage = prefs.getString('targetLanguage') ?? 'Kannada';
 
       final service = TranscriptionService();
 
-      final result = await service.processAudio(widget.audioPath, apiKey, modelName);
+      // --- STEP 1: Always perform transcription ---
+      final originalResults = await service.processAudio(widget.audioPath, apiKey, modelName);
 
       if(mounted) setState(() { _currentStep = ProcessingStep.cleaning; });
       await Future.delayed(const Duration(milliseconds: 400));
-
       if(mounted) setState(() { _currentStep = ProcessingStep.polishing; });
       await Future.delayed(const Duration(milliseconds: 400));
+      
+      Map<String, String> finalResults = Map.from(originalResults);
 
+      // --- STEP 2: Conditionally perform translation ---
+      if (isTranslationEnabled) {
+        if(mounted) setState(() { _currentStep = ProcessingStep.translating; });
+        final translatedResults = await service.translateTexts(
+          originalTexts: originalResults,
+          targetLanguage: targetLanguage,
+          apiKey: apiKey,
+          modelName: modelName,
+        );
+        // Combine original and translated results
+        finalResults.addAll(translatedResults);
+      }
 
       if(mounted) setState(() { _currentStep = ProcessingStep.completed; });
       await Future.delayed(const Duration(milliseconds: 400));
 
       if (mounted) {
-        Navigator.of(context).pop(result);
+        Navigator.of(context).pop(finalResults);
       }
     } catch (e) {
       if(mounted) {
@@ -1202,6 +1238,9 @@ class ProcessingStepper extends StatelessWidget {
             _buildStep(context, 'Cleaning', ProcessingStep.cleaning),
             _buildConnector(ProcessingStep.polishing),
             _buildStep(context, 'Polishing', ProcessingStep.polishing),
+            // --- NEW: Connector and Step for Translating ---
+            _buildConnector(ProcessingStep.translating),
+            _buildStep(context, 'Translating', ProcessingStep.translating),
           ],
         ),
       ],
@@ -1280,30 +1319,43 @@ class _SettingsPageState extends State<SettingsPage> {
   final _apiKeyController = TextEditingController();
   final _modelNameController = TextEditingController();
 
+  // --- NEW STATE VARIABLES ---
+  bool _isTranslationEnabled = false;
+  String _selectedLanguage = 'Kannada';
+  final List<String> _supportedLanguages = ['Kannada', 'Hindi', 'Spanish', 'French', 'German', 'Japanese'];
+
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
   }
 
+  // --- MODIFIED: Load new settings from storage ---
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     if (mounted) {
       setState(() {
         _apiKeyController.text = prefs.getString('apiKey') ?? '';
-        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-1.5-flash-latest';
+        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-2.5-flash';
+        _isTranslationEnabled = prefs.getBool('isTranslationEnabled') ?? false;
+        _selectedLanguage = prefs.getString('targetLanguage') ?? 'Kannada';
       });
     }
   }
 
-  Future<void> _saveApiKey(String value) async {
+  // --- MODIFIED: Save new settings to storage ---
+  Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('apiKey', value);
-  }
-
-    Future<void> _saveModelName(String value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('modelName', value);
+    await prefs.setString('apiKey', _apiKeyController.text);
+    await prefs.setString('modelName', _modelNameController.text);
+    await prefs.setBool('isTranslationEnabled', _isTranslationEnabled);
+    await prefs.setString('targetLanguage', _selectedLanguage);
+    if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Settings saved!')),
+        );
+    }
   }
 
 
@@ -1314,6 +1366,7 @@ class _SettingsPageState extends State<SettingsPage> {
     super.dispose();
   }
 
+  // --- MODIFIED: The entire build method for the new UI ---
   @override
   Widget build(BuildContext context) {
     final themeProvider = Provider.of<ThemeProvider>(context);
@@ -1322,6 +1375,16 @@ class _SettingsPageState extends State<SettingsPage> {
       appBar: AppBar(
         title: const Text('Settings'),
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.save),
+            onPressed: () {
+              _saveSettings();
+              FocusScope.of(context).unfocus();
+            },
+            tooltip: 'Save All Settings',
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16.0),
@@ -1336,21 +1399,11 @@ class _SettingsPageState extends State<SettingsPage> {
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.save),
-                onPressed: () {
-                  _saveApiKey(_apiKeyController.text);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('API Key saved!')),
-                  );
-                  FocusScope.of(context).unfocus();
-                },
-              ),
             ),
           ),
           const SizedBox(height: 8),
           const Text(
-            'Get your Google API key from Google AI Studio. Your API key is stored securely on your device.',
+            'Get your Google API key from Google AI Studio.',
             style: TextStyle(color: Colors.grey, fontSize: 12),
           ),
           const SizedBox(height: 24),
@@ -1359,22 +1412,61 @@ class _SettingsPageState extends State<SettingsPage> {
           TextField(
             controller: _modelNameController,
             decoration: InputDecoration(
-              hintText: 'Use gemini-1.5-flash-latest',
+              hintText: 'Use gemini-2.5-flash',
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.save),
-                onPressed: () {
-                  _saveModelName(_modelNameController.text);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Model name saved!')),
-                  );
-                  FocusScope.of(context).unfocus();
-                },
-              ),
             ),
           ),
+          
+          // --- NEW TRANSLATION SECTION ---
+          const SizedBox(height: 24),
+          _buildSectionTitle('Translation'),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade400, width: 1),
+            ),
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('Enable Translation'),
+                  value: _isTranslationEnabled,
+                  onChanged: (bool value) {
+                    setState(() {
+                      _isTranslationEnabled = value;
+                    });
+                  },
+                  activeColor: Colors.red,
+                  contentPadding: EdgeInsets.zero,
+                ),
+                if (_isTranslationEnabled) ...[
+                  const Divider(height: 1),
+                  DropdownButtonFormField<String>(
+                    value: _selectedLanguage,
+                    decoration: const InputDecoration(
+                      labelText: 'Target Language',
+                      border: InputBorder.none,
+                    ),
+                    items: _supportedLanguages.map((String language) {
+                      return DropdownMenuItem<String>(
+                        value: language,
+                        child: Text(language),
+                      );
+                    }).toList(),
+                    onChanged: (String? newValue) {
+                      setState(() {
+                        _selectedLanguage = newValue!;
+                      });
+                    },
+                  ),
+                ]
+              ],
+            ),
+          ),
+
           const SizedBox(height: 24),
           _buildSectionTitle('Theme'),
           const SizedBox(height: 8),
@@ -1438,6 +1530,7 @@ class _SettingsPageState extends State<SettingsPage> {
 // --- Services ---
 
 class TranscriptionService {
+  // This method ONLY transcribes now.
   Future<Map<String, String>> processAudio(String audioPath, String apiKey, String modelName) async {
     if (apiKey.isEmpty) {
       throw Exception('API Key is missing. Please add it in Settings.');
@@ -1451,8 +1544,8 @@ You are an AI assistant for a voice note app. Process the attached audio file an
 The JSON object must have these exact keys: "rawTranscript", "cleanedTranscript", and "polishedNote".
 
 1.  **rawTranscript**: Provide a direct, accurate transcription of the audio.
-2.  **cleanedTranscript**: Take the raw transcript, remove filler words (like "um", "uh"), correct obvious grammar mistakes, and fix punctuation. Do not add any new information, introductory phrases, or explanations. The output must ONLY be the cleaned text itself.
-3.  **polishedNote**: Transform the cleaned transcript into a well-structured note. Use markdown for formatting (e.g., "## Headings", "- Bullet points"). Identify key points and action items. The output must ONLY be the markdown note itself, starting directly with the content. Do not include any conversational preamble like "Here is the polished note...".
+2.  **cleanedTranscript**: Take the raw transcript, remove filler words (like "um", "uh"), correct obvious grammar mistakes, and fix punctuation.
+3.  **polishedNote**: Transform the cleaned transcript into a well-structured markdown note.
 
 Return only the raw JSON object.
 ''';
@@ -1494,6 +1587,51 @@ Return only the raw JSON object.
       throw Exception('AI model error: ${e.message}');
     } catch (e) {
       throw Exception('An unexpected error occurred while processing the note: $e');
+    }
+  }
+
+  // --- NEW METHOD FOR TRANSLATION ---
+  Future<Map<String, String>> translateTexts({
+    required Map<String, String> originalTexts,
+    required String targetLanguage,
+    required String apiKey,
+    required String modelName,
+  }) async {
+    final model = GenerativeModel(model: modelName, apiKey: apiKey);
+
+    final prompt = '''
+You are an expert translator. I will provide a JSON object with three texts: "rawTranscript", "cleanedTranscript", and "polishedNote".
+Your task is to translate all three of them into **$targetLanguage**.
+
+Return a single, valid JSON object with these exact keys: "raw_translated", "cleaned_translated", and "polished_translated".
+
+Do not add any explanations or conversational text. Return only the raw JSON object.
+''';
+
+    // Combine prompt with the texts to be translated
+    final content = [
+      Content.text(prompt),
+      Content.text('Here is the JSON to translate: ${jsonEncode(originalTexts)}'),
+    ];
+
+    try {
+      final response = await model.generateContent(content);
+      final responseText = response.text;
+
+      if (responseText == null) {
+        throw Exception('Received an empty response from the AI model during translation.');
+      }
+
+      final cleanedJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
+      final decodedJson = jsonDecode(cleanedJson) as Map<String, dynamic>;
+
+      return {
+        'raw_translated': decodedJson['raw_translated'] as String? ?? '',
+        'cleaned_translated': decodedJson['cleaned_translated'] as String? ?? '',
+        'polished_translated': decodedJson['polished_translated'] as String? ?? '',
+      };
+    } catch (e) {
+       throw Exception('An unexpected error occurred during translation: $e');
     }
   }
 }
