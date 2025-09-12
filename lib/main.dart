@@ -1087,7 +1087,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
   }
 }
 
-enum ProcessingStep { transcribing, cleaning, polishing, translating, completed }
+enum ProcessingStep { uploading, processing, downloading, completed }
 
 class TranscribePage extends StatefulWidget {
   final String audioPath;
@@ -1098,7 +1098,7 @@ class TranscribePage extends StatefulWidget {
 }
 
 class _TranscribePageState extends State<TranscribePage> {
-  ProcessingStep _currentStep = ProcessingStep.transcribing;
+  ProcessingStep _currentStep = ProcessingStep.uploading;
   bool _isProcessing = true;
   String _errorMessage = '';
 
@@ -1113,44 +1113,43 @@ class _TranscribePageState extends State<TranscribePage> {
     setState(() {
       _isProcessing = true;
       _errorMessage = '';
-      _currentStep = ProcessingStep.transcribing;
+      _currentStep = ProcessingStep.uploading;
     });
 
     try {
+      // Simulate the "Uploading" phase for better UX
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+      setState(() { _currentStep = ProcessingStep.processing; });
+
       final prefs = await SharedPreferences.getInstance();
       final apiKey = prefs.getString('apiKey') ?? '';
       final modelName = prefs.getString('modelName') ?? 'gemini-2.5-flash';
-      
-      // --- NEW: Check if translation is enabled in settings ---
       final isTranslationEnabled = prefs.getBool('isTranslationEnabled') ?? false;
       final targetLanguage = prefs.getString('targetLanguage') ?? 'English';
-
       final service = TranscriptionService();
-
-      // --- STEP 1: Always perform transcription ---
-      final originalResults = await service.processAudio(widget.audioPath, apiKey, modelName);
-
-      if(mounted) setState(() { _currentStep = ProcessingStep.cleaning; });
-      await Future.delayed(const Duration(milliseconds: 400));
-      if(mounted) setState(() { _currentStep = ProcessingStep.polishing; });
-      await Future.delayed(const Duration(milliseconds: 400));
       
+      // Both transcription and translation happen under the "Processing" step
+      final originalResults = await service.processAudio(widget.audioPath, apiKey, modelName);
       Map<String, String> finalResults = Map.from(originalResults);
 
-      // --- STEP 2: Conditionally perform translation ---
       if (isTranslationEnabled) {
-        if(mounted) setState(() { _currentStep = ProcessingStep.translating; });
         final translatedResults = await service.translateTexts(
           originalTexts: originalResults,
           targetLanguage: targetLanguage,
           apiKey: apiKey,
           modelName: modelName,
         );
-        // Combine original and translated results
         finalResults.addAll(translatedResults);
       }
 
-      if(mounted) setState(() { _currentStep = ProcessingStep.completed; });
+      // Move to the "Downloading" phase
+      if (!mounted) return;
+      setState(() { _currentStep = ProcessingStep.downloading; });
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      if (!mounted) return;
+      setState(() { _currentStep = ProcessingStep.completed; });
       await Future.delayed(const Duration(milliseconds: 400));
 
       if (mounted) {
@@ -1233,14 +1232,11 @@ class ProcessingStepper extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            _buildStep(context, 'Transcribing', ProcessingStep.transcribing),
-            _buildConnector(ProcessingStep.cleaning),
-            _buildStep(context, 'Cleaning', ProcessingStep.cleaning),
-            _buildConnector(ProcessingStep.polishing),
-            _buildStep(context, 'Polishing', ProcessingStep.polishing),
-            // --- NEW: Connector and Step for Translating ---
-            _buildConnector(ProcessingStep.translating),
-            _buildStep(context, 'Translating', ProcessingStep.translating),
+            _buildStep(context, 'Uploading', ProcessingStep.uploading),
+            _buildConnector(ProcessingStep.processing),
+            _buildStep(context, 'Processing', ProcessingStep.processing),
+            _buildConnector(ProcessingStep.downloading),
+            _buildStep(context, 'Downloading', ProcessingStep.downloading),
           ],
         ),
       ],
@@ -1248,6 +1244,7 @@ class ProcessingStepper extends StatelessWidget {
   }
 
   bool _isStepActive(ProcessingStep step) {
+    // A step is active if it's the current one or has been completed.
     return currentStep.index >= step.index;
   }
 
@@ -1262,6 +1259,7 @@ class ProcessingStepper extends StatelessWidget {
     if (isCompleted) {
       child = const Icon(Icons.check, color: Colors.white, size: 16);
     } else if (isCurrent) {
+      // Show a progress indicator for the current step
       child = Padding(
         padding: const EdgeInsets.all(4.0),
         child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.green.shade700)),
@@ -1284,7 +1282,7 @@ class ProcessingStepper extends StatelessWidget {
         Text(
           title,
           style: TextStyle(
-            color: isActive ? (isDarkTheme(context) ? Colors.white : Colors.black) : Colors.grey,
+            color: isActive ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black) : Colors.grey,
             fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
           ),
         ),
@@ -1293,18 +1291,17 @@ class ProcessingStepper extends StatelessWidget {
   }
 
   Widget _buildConnector(ProcessingStep step) {
+    // The connector should be active if the step it leads to is active.
     final isActive = _isStepActive(step);
     return Expanded(
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 300),
         height: 2,
         color: isActive ? Colors.green : Colors.grey.shade400,
-        margin: const EdgeInsets.only(bottom: 28),
+        margin: const EdgeInsets.only(bottom: 28), // Aligns with the middle of the circle
       ),
     );
   }
-
-  bool isDarkTheme(BuildContext context) => Theme.of(context).brightness == Brightness.dark;
 }
 
 
