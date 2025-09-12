@@ -1,10 +1,7 @@
 name: voice_notes_app
 description: A new Flutter project.
-
 publish_to: 'none' 
-
 version: 1.0.0+1
-
 environment:
   sdk: '>=3.0.0 <4.0.0'
 
@@ -23,17 +20,16 @@ dependencies:
   file_picker: ^8.0.0+1
   audioplayers: ^6.0.0
   flutter_markdown: ^0.7.1
-  translator: ^1.0.0
-
-
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
   flutter_launcher_icons: "^0.13.1"
+  
 flutter:
   uses-material-design: true
+
 flutter_launcher_icons:
   android: "launcher_icon" # can be true or a string with the desired file name
   ios: true
