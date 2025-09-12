@@ -1474,9 +1474,11 @@ Return only the raw JSON object.
     final translatedCleaned = await translator.translate(cleaned, to: languageCode);
     final translatedPolished = await translator.translate(polished, to: languageCode);
 
-    // Add this line to fix markdown formatting after translation
+    // Fix markdown formatting after translation
     final fixedPolishedNote = translatedPolished.text.replaceAllMapped(
       RegExp(r'\*\*\s*(.*?)\s*\*\*'), (match) => '**${match.group(1)}**'
+    ).replaceAllMapped(
+      RegExp(r'^\s*[-*]\s*(.*)', multiLine: true), (match) => '- ${match.group(1)}'
     );
 
     return {
