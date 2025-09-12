@@ -1321,8 +1321,8 @@ class _SettingsPageState extends State<SettingsPage> {
 
   // --- NEW STATE VARIABLES ---
   bool _isTranslationEnabled = false;
-  String _selectedLanguage = 'Kannada';
-  final List<String> _supportedLanguages = ['Kannada', 'Hindi', 'Spanish', 'French', 'German', 'Japanese'];
+  String _selectedLanguage = 'English';
+  final List<String> _supportedLanguages = ['Kannada', 'English', 'Telugu', 'Tamil', 'Hindi', 'Spanish', 'French', 'German', 'Japanese'];
 
 
   @override
