@@ -1123,7 +1123,7 @@ class _TranscribePageState extends State<TranscribePage> {
       
       // --- NEW: Check if translation is enabled in settings ---
       final isTranslationEnabled = prefs.getBool('isTranslationEnabled') ?? false;
-      final targetLanguage = prefs.getString('targetLanguage') ?? 'Kannada';
+      final targetLanguage = prefs.getString('targetLanguage') ?? 'English';
 
       final service = TranscriptionService();
 
