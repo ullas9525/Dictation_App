@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'package:translator/translator.dart';
 
 void main() {
   runApp(
@@ -971,6 +972,8 @@ Widget _buildCopyButton(BuildContext context, String label, String text, {bool i
           data: text,
           styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
             p: const TextStyle(fontSize: 16, height: 1.5),
+            h2: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            strong: const TextStyle(fontWeight: FontWeight.bold),
           ),
         ),
       ),
@@ -1172,6 +1175,8 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   final _apiKeyController = TextEditingController();
   final _modelNameController = TextEditingController();
+  String _selectedLanguage = 'kn';
+  final translator = GoogleTranslator();
   @override
   void initState() {
     super.initState();
@@ -1184,6 +1189,7 @@ class _SettingsPageState extends State<SettingsPage> {
       setState(() {
         _apiKeyController.text = prefs.getString('apiKey') ?? '';
         _modelNameController.text = prefs.getString('modelName') ?? 'gemini-2.5-flash';
+        _selectedLanguage = prefs.getString('selectedLanguage') ?? 'kn';
       });
     }
   }
@@ -1196,6 +1202,11 @@ class _SettingsPageState extends State<SettingsPage> {
     Future<void> _saveModelName(String value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('modelName', value);
+  }
+
+  Future<void> _saveSelectedLanguage(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('selectedLanguage', value);
   }
 
   @override
@@ -1266,6 +1277,41 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const SizedBox(height: 24),
+          _buildSectionTitle('Output Language'),
+          const SizedBox(height: 8),
+          const Text(
+            'The language in which the transcribed note will be displayed.',
+            style: TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              child: DropdownButton<String>(
+                value: _selectedLanguage,
+                onChanged: (String? newValue) {
+                  if (newValue != null) {
+                    setState(() {
+                      _selectedLanguage = newValue;
+                    });
+                    _saveSelectedLanguage(newValue);
+                  }
+                },
+                items: <String>['kn', 'en', 'es', 'fr', 'de', 'hi', 'te', 'ta']
+                    .map<DropdownMenuItem<String>>((String value) {
+                  return DropdownMenuItem<String>(
+                    value: value,
+                    child: Text(_getLanguageName(value)),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
           _buildSectionTitle('Theme'),
           const SizedBox(height: 8),
           Row(
@@ -1299,6 +1345,29 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  String _getLanguageName(String code) {
+    switch (code) {
+      case 'kn':
+        return 'Kannada';
+      case 'en':
+        return 'English';
+      case 'es':
+        return 'Spanish';
+      case 'fr':
+        return 'French';
+      case 'de':
+        return 'German';
+      case 'hi':
+        return 'Hindi';
+      case 'te':
+        return 'Telugu';
+      case 'ta':
+        return 'Tamil';
+      default:
+        return '';
+    }
+  }
+
   Widget _buildThemeOption(BuildContext context, String title, IconData icon, bool isSelected, VoidCallback onTap) {
     final colorScheme = Theme.of(context).colorScheme;
     return Expanded(
@@ -1327,6 +1396,8 @@ class _SettingsPageState extends State<SettingsPage> {
 
 // --- Services ---
 class TranscriptionService {
+  final translator = GoogleTranslator();
+
   Future<Map<String, String>> processAudio(String audioPath, String apiKey, String modelName) async {
     if (apiKey.isEmpty) {
       throw Exception('API Key is missing. Please add it in Settings.');
@@ -1339,7 +1410,11 @@ The JSON object must have these exact keys: "rawTranscript", "cleanedTranscript"
 
 1.  **rawTranscript**: Provide a direct, accurate transcription of the audio.
 2.  **cleanedTranscript**: Take the raw transcript, remove filler words (like "um", "uh"), correct obvious grammar mistakes, and fix punctuation. Do not add any new information, introductory phrases, or explanations. The output must ONLY be the cleaned text itself.
-3.  **polishedNote**: Transform the cleaned transcript into a well-structured note. Use markdown for formatting (e.g., "## Headings", "- Bullet points"). Identify key points and action items. The output must ONLY be the markdown note itself, starting directly with the content. Do not include any conversational preamble like "Here is the polished note...".
+3.  **polishedNote**: Transform the cleaned transcript into a well-structured note. Use valid markdown for formatting.
+    - For headings, use `## Heading` (a space is required after the `##`).
+    - For bold text, use `**text**`. There must be no spaces between the asterisks and the text.
+    - For bullet points, use `- ` or `* ` (a space is required after the character).
+    Identify key points and action items. The output must ONLY be the markdown note itself, starting directly with the content. Do not include any conversational preamble like "Here is the polished note...".
 
 Return only the raw JSON object.
 ''';
@@ -1365,12 +1440,24 @@ Return only the raw JSON object.
           !decodedJson.containsKey('polishedNote')) {
         throw Exception('The AI response is missing required data. Please try again.');
       }
+      
+      // Clean up markdown before translation
+      final polishedNote = (decodedJson['polishedNote'] as String)
+          .replaceAllMapped(RegExp(r'\*\*\s*(.*?)\s*\*\*'), (match) {
+        return '**${match.group(1)}**';
+      });
 
-      return {
-        'rawTranscript': decodedJson['rawTranscript'] as String,
-        'cleanedTranscript': decodedJson['cleanedTranscript'] as String,
-        'polishedNote': decodedJson['polishedNote'] as String,
-      };
+      final prefs = await SharedPreferences.getInstance();
+      final selectedLanguage = prefs.getString('selectedLanguage') ?? 'kn';
+
+      final translatedData = await _translateData(
+        decodedJson['rawTranscript'] as String,
+        decodedJson['cleanedTranscript'] as String,
+        polishedNote,
+        selectedLanguage,
+      );
+
+      return translatedData;
 
     } on GenerativeAIException catch (e) {
       if (e.message.contains('Unhandled format for Content')) {
@@ -1380,5 +1467,22 @@ Return only the raw JSON object.
     } catch (e) {
       throw Exception('An unexpected error occurred while processing the note: $e');
     }
+  }
+
+  Future<Map<String, String>> _translateData(String raw, String cleaned, String polished, String languageCode) async {
+    final translatedRaw = await translator.translate(raw, to: languageCode);
+    final translatedCleaned = await translator.translate(cleaned, to: languageCode);
+    final translatedPolished = await translator.translate(polished, to: languageCode);
+
+    // Add this line to fix markdown formatting after translation
+    final fixedPolishedNote = translatedPolished.text.replaceAllMapped(
+      RegExp(r'\*\*\s*(.*?)\s*\*\*'), (match) => '**${match.group(1)}**'
+    );
+
+    return {
+      'rawTranscript': translatedRaw.text,
+      'cleanedTranscript': translatedCleaned.text,
+      'polishedNote': fixedPolishedNote, // Use the fixed version
+    };
   }
 }

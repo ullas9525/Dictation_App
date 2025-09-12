@@ -23,6 +23,7 @@ dependencies:
   file_picker: ^8.0.0+1
   audioplayers: ^6.0.0
   flutter_markdown: ^0.7.1
+  translator: ^1.0.0
 
 
 
@@ -37,4 +38,4 @@ flutter_launcher_icons:
   android: "launcher_icon" # can be true or a string with the desired file name
   ios: true
   image_path: "assets/icon.png" # path to your icon image
-  min_sdk_android: 21 
+  min_sdk_android: 21
