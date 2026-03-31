@@ -18,7 +18,7 @@ So instead of scrolling through messy recordings, you instantly get well-structu
 
 ### Why This Matters
 This process is:
-- ⏱ **Takes less time** – instantly turns speech into text.  
+- ⏱ **Takes less time** – Quickly turns speech into text.  
 - ✅ **More perfect** – AI corrects mistakes and fillers.  
 - 🔒 **More reliable** – keeps your dictation accurate and safe.  
 - 🙌 **More easy** – no typing, just speak and let the app do the rest.  
