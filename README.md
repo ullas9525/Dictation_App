@@ -14,7 +14,7 @@ So instead of scrolling through messy recordings, you instantly get well-structu
 ## 📖 Story
 - **Historical Context**: Before the advent of typing and texting, people relied on handwriting for communication.  
 - **Evolution to Text**: To reduce delays and save time, communication transitioned to typing and texting.  
-- **Our Solution (Audio Input)**: Our app takes this further by allowing users to speak naturally. The app instantly converts speech into polished, easy-to-read text.  
+- **Our Solution (Audio Input)**: Our app takes this further by allowing users to speak naturally. The app converts speech into polished, easy-to-read text.  
 
 ### Why This Matters
 This process is:
