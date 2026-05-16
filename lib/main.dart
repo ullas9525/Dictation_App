@@ -921,6 +921,16 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
           appBar: AppBar(
             title: const Text('Note'),
             centerTitle: true,
+            // --- NEW: Try Again Button (Refresh Icon) ---
+            leading: IconButton(
+              icon: noteProvider.isPolishing 
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.red))
+                : const Icon(Icons.refresh),
+              onPressed: noteProvider.isPolishing 
+                ? null 
+                : () => _reProcessNote(context, noteProvider),
+              tooltip: 'Try Again (Re-polish)',
+            ),
             // --- NEW: Add toggle switch to actions if translation is available ---
             actions: [
               if (hasTranslation)
