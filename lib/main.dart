@@ -1,17 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter_sound/flutter_sound.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:record/record.dart';
+import 'package:permission_handler/permission_handler.dart' as ph;
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert'; // Import for json decoding
-import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'package:file_picker/file_picker.dart';
+import 'package:share_plus/share_plus.dart';
 
 void main() {
   runApp(
@@ -71,6 +73,38 @@ class NoteProvider with ChangeNotifier {
   String get cleanedTranscriptTranslated => _cleanedTranscriptTranslated;
   String get polishedTranscriptTranslated => _polishedTranscriptTranslated;
 
+  // --- NEW: Re-polishing state ---
+  bool _isPolishing = false;
+  bool get isPolishing => _isPolishing;
+
+  void setPolishing(bool value) {
+    _isPolishing = value;
+    notifyListeners();
+  }
+
+  /// Updates the polished note AND clears the polishing flag in a single notification
+  /// to prevent a double-rebuild race that caused the UI to appear "stuck".
+  void updatePolishedNoteAndFinish(String newNote) {
+    _polishedTranscript = newNote;
+    _isPolishing = false;
+    notifyListeners();
+  }
+
+  void updatePolishedNote(String newNote) {
+    _polishedTranscript = newNote;
+    notifyListeners();
+  }
+
+  void updateRawTranscript(String value) {
+    _rawTranscript = value;
+    notifyListeners();
+  }
+
+  void updateCleanedTranscript(String value) {
+    _cleanedTranscript = value;
+    notifyListeners();
+  }
+
   void updateTranscripts(Map<String, String> transcripts) {
     // Update original transcripts
     _rawTranscript = transcripts['rawTranscript'] ?? 'No raw transcript available.';
@@ -87,7 +121,7 @@ class NoteProvider with ChangeNotifier {
 }
 
 class RecordingProvider with ChangeNotifier {
-  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
+  AudioRecorder? _recorder;
   StreamSubscription? _recorderSubscription;
   Timer? _durationTimer;
 
@@ -97,7 +131,8 @@ class RecordingProvider with ChangeNotifier {
   bool _isSessionActive = false;
   bool get isSessionActive => _isSessionActive;
 
-  bool get isRecording => _recorder.isRecording;
+  bool _isRecording = false;
+  bool get isRecording => _isRecording;
 
   bool _isPaused = false;
   bool get isPaused => _isPaused;
@@ -116,13 +151,17 @@ class RecordingProvider with ChangeNotifier {
   }
 
   Future<void> _initRecorder() async {
-    final status = await Permission.microphone.request();
-    if (status != PermissionStatus.granted) {
+    print("DEBUG: Initializing recorder permissions...");
+    final status = await ph.Permission.microphone.request();
+    if (status != ph.PermissionStatus.granted) {
+      print("DEBUG: Microphone permission NOT granted");
       return;
     }
-    await _recorder.openRecorder();
-    await _recorder.setSubscriptionDuration(const Duration(milliseconds: 100));
+    
+    // Test if we can create one
+    _recorder = AudioRecorder();
     _isInitialized = true;
+    print("DEBUG: Recorder initialized");
     notifyListeners();
   }
 
@@ -136,83 +175,154 @@ class RecordingProvider with ChangeNotifier {
 
   void _startDecibelSubscription() {
     _recorderSubscription?.cancel();
-    _recorderSubscription = _recorder.onProgress!.listen((e) {
-      _decibelLevel = e.decibels ?? -120.0;
+    if (_recorder == null) return;
+    
+    _recorderSubscription = _recorder!.onAmplitudeChanged(const Duration(milliseconds: 100)).listen((amp) {
+      _decibelLevel = amp.current;
       notifyListeners();
     });
   }
 
   Future<void> startRecording() async {
-    if (!_isInitialized || _isSessionActive) return;
+    print("DEBUG: starting session...");
+    if (!_isInitialized) {
+      await _initRecorder();
+      if (!_isInitialized) return;
+    }
 
-    Directory tempDir = await getTemporaryDirectory();
-    _audioPath = '${tempDir.path}/voice_note_${DateTime.now().millisecondsSinceEpoch}.aac';
+    try {
+      // 1. Force cleanup of old instance to fix "Stream already listened to"
+      await _recorderSubscription?.cancel();
+      await _recorder?.dispose();
+      _recorder = AudioRecorder(); // FRESH INSTANCE
 
-    await _recorder.startRecorder(
-      toFile: _audioPath,
-      codec: Codec.aacADTS,
-    );
+      if (await ph.Permission.microphone.isGranted) {
+        Directory tempDir = await getTemporaryDirectory();
+        _audioPath = '${tempDir.path}/voice_note_${DateTime.now().millisecondsSinceEpoch}.m4a';
 
-    _duration = Duration.zero;
-    _startTimer();
-    _startDecibelSubscription();
+        print("DEBUG: Starting recording to $_audioPath");
+        
+        final config = RecordConfig(
+          encoder: AudioEncoder.aacLc,  // AAC = ~10x smaller than WAV
+          sampleRate: 16000,
+          numChannels: 1,
+          bitRate: 64000, // 64kbps is plenty for voice
+        );
 
-    _isPaused = false;
-    _isSessionActive = true;
-    notifyListeners();
+        await _recorder!.start(config, path: _audioPath!);
+        
+        _isRecording = true;
+        _isSessionActive = true;
+        _isPaused = false;
+        _duration = Duration.zero;
+        
+        _startTimer();
+        _startDecibelSubscription();
+        
+        print("DEBUG: Recorder started successfully");
+        notifyListeners();
+      } else {
+        print("DEBUG: No permission");
+      }
+    } catch (e) {
+      print("DEBUG: Error starting recorder: $e");
+      _isRecording = false;
+      _isSessionActive = false;
+      notifyListeners();
+    }
   }
 
   Future<void> pauseRecording() async {
-    if (!_isInitialized || !_isSessionActive || _isPaused) return;
-    await _recorder.pauseRecorder();
-    _isPaused = true;
-    _durationTimer?.cancel();
-    _recorderSubscription?.cancel();
-    _recorderSubscription = null;
-    notifyListeners();
+    try {
+      if (_recorder != null && await _recorder!.isRecording()) {
+        await _recorder!.pause();
+        _isPaused = true;
+        _isRecording = false;
+        _durationTimer?.cancel();
+        notifyListeners();
+      }
+    } catch (e) {
+      print("DEBUG: Error pausing: $e");
+    }
   }
 
   Future<void> resumeRecording() async {
-    if (!_isInitialized || !_isSessionActive || !_isPaused) return;
-    await _recorder.resumeRecorder();
-    _isPaused = false;
-    _startTimer();
-    _startDecibelSubscription();
-    notifyListeners();
+    try {
+      if (_recorder != null && await _recorder!.isPaused()) {
+        await _recorder!.resume();
+        _isPaused = false;
+        _isRecording = true;
+        _startTimer();
+        notifyListeners();
+      }
+    } catch (e) {
+      print("DEBUG: Error resuming: $e");
+    }
   }
 
-  Future<void> stopRecording() async {
-    if (!_isInitialized || !_isSessionActive) return;
-    await _recorder.stopRecorder();
-    _durationTimer?.cancel();
-    await _recorderSubscription?.cancel();
-    _recorderSubscription = null;
-    _duration = Duration.zero;
-    _decibelLevel = -120.0;
-    _isPaused = false;
-    _isSessionActive = false;
-    notifyListeners();
+  Future<String?> stopRecording() async {
+    print("DEBUG: stopRecording signal...");
+    try {
+      _durationTimer?.cancel();
+      await _recorderSubscription?.cancel();
+      _recorderSubscription = null;
+
+      String? path;
+      if (_recorder != null) {
+        if (await _recorder!.isRecording() || await _recorder!.isPaused()) {
+          path = await _recorder!.stop();
+        }
+        await _recorder!.dispose();
+        _recorder = null;
+      }
+      
+      _isRecording = false;
+      _isSessionActive = false;
+      _isPaused = false;
+      _duration = Duration.zero;
+      _decibelLevel = -120.0;
+      
+      print("DEBUG: Final Stop. Path: $path");
+      notifyListeners();
+      return path;
+    } catch (e) {
+      print("DEBUG: Error stopping: $e");
+      _isRecording = false;
+      _isSessionActive = false;
+      return null;
+    }
   }
 
   Future<void> cancelRecording() async {
-    if (!_isInitialized || !_isSessionActive) return;
-    await _recorder.stopRecorder();
-    _durationTimer?.cancel();
-    await _recorderSubscription?.cancel();
-    _recorderSubscription = null;
-    _audioPath = null;
-    _duration = Duration.zero;
-    _decibelLevel = -120.0;
-    _isPaused = false;
-    _isSessionActive = false;
-    notifyListeners();
+    print("DEBUG: cancelRecording...");
+    try {
+      _durationTimer?.cancel();
+      await _recorderSubscription?.cancel();
+      _recorderSubscription = null;
+
+      if (_recorder != null) {
+        await _recorder!.stop();
+        await _recorder!.dispose();
+        _recorder = null;
+      }
+      
+      _isRecording = false;
+      _isSessionActive = false;
+      _isPaused = false;
+      _audioPath = null;
+      _duration = Duration.zero;
+      _decibelLevel = -120.0;
+      notifyListeners();
+    } catch (e) {
+      print("DEBUG: Error canceling: $e");
+    }
   }
 
   @override
   void dispose() {
     _durationTimer?.cancel();
     _recorderSubscription?.cancel();
-    _recorder.closeRecorder();
+    _recorder?.dispose();
     super.dispose();
   }
 }
@@ -355,6 +465,27 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _loadAvailableMicrophones();
   }
 
+  Future<void> _pickAndUploadAudio() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['wav', 'mp3', 'm4a', 'aac', 'ogg'],
+    );
+    if (result != null && result.files.single.path != null) {
+      String path = result.files.single.path!;
+      if (mounted) {
+        final noteProvider = Provider.of<NoteProvider>(context, listen: false);
+        final transcripts = await Navigator.push<Map<String, String>>(
+          context,
+          MaterialPageRoute(builder: (context) => TranscribePage(audioPath: path)),
+        );
+        if (transcripts != null) {
+          noteProvider.updateTranscripts(transcripts);
+          widget.onNoteProcessed();
+        }
+      }
+    }
+  }
+
   Future<void> _loadAvailableMicrophones() async {
     // Note: This is a simplified implementation. In a real app, you would use
     // platform-specific code to get actual microphone devices
@@ -434,8 +565,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Future<void> _stopAndProcessRecording(RecordingProvider recorder) async {
     if (!recorder.isInitialized || !recorder.isSessionActive) return;
 
+    final duration = recorder.duration;
     _animationController.reverse();
     await recorder.stopRecording();
+
+    if (duration.inMilliseconds < 1000) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Recording too short. Please record for at least 1 second.')),
+        );
+      }
+      return;
+    }
 
     if (recorder.audioPath != null && mounted) {
       final noteProvider = Provider.of<NoteProvider>(context, listen: false);
@@ -450,20 +591,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
-  Future<void> _checkApiKeyAndStart(RecordingProvider recorder) async {
+  Future<void> _checkAndStart(RecordingProvider recorder) async {
     if (!recorder.isInitialized) return;
-
-    final prefs = await SharedPreferences.getInstance();
-    final apiKey = prefs.getString('apiKey') ?? '';
-    if (apiKey.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('Please add your Gemini API Key in Settings first.'),
-          action: SnackBarAction(label: 'Settings', onPressed: widget.onNavigateToSettings),
-        ));
-      }
-      return;
-    }
+    // Direct cloud architecture: no server health check needed.
     _animationController.forward();
     await recorder.startRecording();
   }
@@ -565,7 +695,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                               )
                             : GestureDetector(
                                 key: const ValueKey('idle_button'),
-                                onTap: () => _checkApiKeyAndStart(recorder),
+                                onTap: () => _checkAndStart(recorder),
                                 child: Container(
                                   padding: const EdgeInsets.all(25),
                                   decoration: BoxDecoration(
@@ -586,11 +716,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       const SizedBox(height: 24),
                       SizedBox(
                         height: 48,
-                        child: AnimatedOpacity(
+                        child: AnimatedSwitcher(
                           duration: const Duration(milliseconds: 200),
-                          opacity: recorder.isSessionActive ? 1.0 : 0.0,
                           child: recorder.isSessionActive
                               ? TextButton(
+                                  key: const ValueKey('cancel_button'),
                                   onPressed: recorder.cancelRecording,
                                   child: const Text('Cancel', style: TextStyle(fontSize: 16)),
                                   style: TextButton.styleFrom(
@@ -598,7 +728,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                                   ),
                                 )
-                              : const SizedBox(),
+                              : TextButton.icon(
+                                  key: const ValueKey('upload_button'),
+                                  onPressed: _pickAndUploadAudio,
+                                  icon: const Icon(Icons.upload_file),
+                                  label: const Text('Upload .wav file'),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: theme.textTheme.bodyLarge?.color,
+                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                  ),
+                                ),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -891,8 +1030,18 @@ class NotePage extends StatefulWidget {
 
 class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  // --- NEW: State for showing translated text ---
   bool _showTranslated = false;
+  bool _isEditing = false; // Toggle between view (Markdown/Text) and edit (TextField)
+
+  // --- Controllers for editable transcript fields ---
+  final TextEditingController _rawController = TextEditingController();
+  final TextEditingController _cleanedController = TextEditingController();
+  final TextEditingController _polishedController = TextEditingController();
+
+  // Track last-synced values to avoid cursor-jump on every rebuild
+  String _lastRaw = '';
+  String _lastCleaned = '';
+  String _lastPolished = '';
 
   @override
   void initState() {
@@ -904,8 +1053,37 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final provider = Provider.of<NoteProvider>(context, listen: false);
+    _syncControllers(provider);
+  }
+
+  void _syncControllers(NoteProvider provider) {
+    final raw = _showTranslated ? provider.rawTranscriptTranslated : provider.rawTranscript;
+    final cleaned = _showTranslated ? provider.cleanedTranscriptTranslated : provider.cleanedTranscript;
+    final polished = _showTranslated ? provider.polishedTranscriptTranslated : provider.polishedTranscript;
+
+    if (raw != _lastRaw) {
+      _lastRaw = raw;
+      _rawController.text = raw;
+    }
+    if (cleaned != _lastCleaned) {
+      _lastCleaned = cleaned;
+      _cleanedController.text = cleaned;
+    }
+    if (polished != _lastPolished) {
+      _lastPolished = polished;
+      _polishedController.text = polished;
+    }
+  }
+
+  @override
   void dispose() {
     _tabController.dispose();
+    _rawController.dispose();
+    _cleanedController.dispose();
+    _polishedController.dispose();
     super.dispose();
   }
 
@@ -914,31 +1092,29 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
   Widget build(BuildContext context) {
     return Consumer<NoteProvider>(
       builder: (context, noteProvider, child) {
-        // --- NEW: Check if translated content exists ---
+        // Sync controllers every time provider rebuilds
+        _syncControllers(noteProvider);
         final bool hasTranslation = noteProvider.rawTranscriptTranslated.isNotEmpty;
 
         return Scaffold(
           appBar: AppBar(
             title: const Text('Note'),
             centerTitle: true,
-            // --- NEW: Try Again Button (Refresh Icon) ---
-            leading: IconButton(
-              icon: noteProvider.isPolishing 
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.red))
-                : const Icon(Icons.refresh),
-              onPressed: noteProvider.isPolishing 
-                ? null 
-                : () => _reProcessNote(context, noteProvider),
-              tooltip: 'Try Again (Re-polish)',
-            ),
-            // --- NEW: Add toggle switch to actions if translation is available ---
             actions: [
+              // --- Try Again with Another Model ---
+              IconButton(
+                icon: const Icon(Icons.auto_awesome),
+                tooltip: 'Try Again with Another Model',
+                onPressed: noteProvider.isPolishing
+                    ? null
+                    : () => _showTryAgainSheet(context, noteProvider),
+              ),
               if (hasTranslation)
                 Padding(
                   padding: const EdgeInsets.only(right: 8.0),
                   child: Row(
                     children: [
-                      Text(_showTranslated ? "Translated" : "Original"),
+                      Text(_showTranslated ? "Trans" : "Orig"),
                       Switch(
                         value: _showTranslated,
                         onChanged: (value) {
@@ -972,78 +1148,87 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                   child: TabBarView(
                     controller: _tabController,
                     children: [
-                      // --- MODIFIED: Show text based on toggle state ---
-                      _buildTranscriptCard(
-                          context, _showTranslated ? noteProvider.rawTranscriptTranslated : noteProvider.rawTranscript),
-                      _buildTranscriptCard(context,
-                          _showTranslated ? noteProvider.cleanedTranscriptTranslated : noteProvider.cleanedTranscript),
-                      _buildPolishedCard(
-                          context,
-                          _showTranslated
-                              ? noteProvider.polishedTranscriptTranslated
-                              : noteProvider.polishedTranscript),
+                      // Tab 0: Raw Transcript
+                      _isEditing
+                          ? _buildEditableCard(context, _rawController, onChanged: (v) { _lastRaw = v; noteProvider.updateRawTranscript(v); })
+                          : _buildReadCard(context, _rawController.text, isMarkdown: false),
+                      // Tab 1: Cleaned
+                      _isEditing
+                          ? _buildEditableCard(context, _cleanedController, onChanged: (v) { _lastCleaned = v; noteProvider.updateCleanedTranscript(v); })
+                          : _buildReadCard(context, _cleanedController.text, isMarkdown: false),
+                      // Tab 2: Polished Note (Markdown rendered)
+                      _isEditing
+                          ? _buildEditableCard(context, _polishedController, onChanged: (v) { _lastPolished = v; noteProvider.updatePolishedNote(v); })
+                          : _buildReadCard(context, _polishedController.text, isMarkdown: true),
                     ],
                   ),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 12),
+                // --- Bottom Action Bar: Copy + Edit/Save ---
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16.0),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      return AnimatedBuilder(
-                        animation: _tabController.animation!,
-                        builder: (context, child) {
-                          return SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            physics: const NeverScrollableScrollPhysics(),
-                            child: ClipRect(
-                              child: Transform.translate(
-                                offset: Offset(-_tabController.animation!.value * constraints.maxWidth, 0),
-                                child: Row(
-                                  children: [
-                                    SizedBox(
-                                      width: constraints.maxWidth,
-                                      child: _buildCopyButton(
-                                        context,
-                                        'Copy Transcript',
-                                        _showTranslated
-                                            ? noteProvider.rawTranscriptTranslated
-                                            : noteProvider.rawTranscript,
-                                        isMarkdown: false,
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: constraints.maxWidth,
-                                      child: _buildCopyButton(
-                                        context,
-                                        'Copy Transcript',
-                                        _showTranslated
-                                            ? noteProvider.cleanedTranscriptTranslated
-                                            : noteProvider.cleanedTranscript,
-                                        isMarkdown: false,
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: constraints.maxWidth,
-                                      child: _buildCopyButton(
-                                        context,
-                                        'Copy Transcript',
-                                        _showTranslated
-                                            ? noteProvider.polishedTranscriptTranslated
-                                            : noteProvider.polishedTranscript,
-                                        isMarkdown: true,
-                                      ),
-                                    ),
-                                  ],
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            final tab = _tabController.index;
+                            String text = tab == 0
+                                ? noteProvider.rawTranscript
+                                : tab == 1
+                                    ? noteProvider.cleanedTranscript
+                                    : noteProvider.polishedTranscript;
+                            
+                            // Strip markdown and formatting symbols from Polished Note
+                            if (tab == 2) {
+                              text = text.replaceAll(RegExp(r'[*#_`/\\]'), '');
+                              text = text.replaceAll(RegExp(r'^\s*-\s*', multiLine: true), '');
+                            }
+
+                            Clipboard.setData(ClipboardData(text: text));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Copied!')),
+                            );
+                          },
+                          icon: const Icon(Icons.copy, size: 18),
+                          label: const Text('Copy'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.grey.shade700,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                            minimumSize: const Size(0, 50),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _isEditing
+                            ? ElevatedButton.icon(
+                                onPressed: () => setState(() => _isEditing = false),
+                                icon: const Icon(Icons.check, size: 18),
+                                label: const Text('Save'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.green,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                                  minimumSize: const Size(0, 50),
+                                ),
+                              )
+                            : ElevatedButton.icon(
+                                onPressed: () => setState(() => _isEditing = true),
+                                icon: const Icon(Icons.edit, size: 18),
+                                label: const Text('Edit'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.red,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                                  minimumSize: const Size(0, 50),
                                 ),
                               ),
-                            ),
-                          );
-                        },
-                      );
-                    },
+                      ),
+                    ],
                   ),
-                )
+                ),
               ],
             ),
           ),
@@ -1051,6 +1236,112 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
       },
     );
   }
+
+  // --- Try Again with Groq Brain Model ---
+  void _showTryAgainSheet(BuildContext context, NoteProvider provider) {
+    String _sheetModel = 'llama-3.3-70b-versatile';
+    SharedPreferences.getInstance().then((prefs) {
+      _sheetModel = prefs.getString('groq_llm_model') ?? 'llama-3.3-70b-versatile';
+    });
+
+    final List<String> models = [
+      'llama-3.3-70b-versatile',
+      'llama-3.1-8b-instant',
+      'meta-llama/llama-4-scout-17b-16e-instruct',
+      'qwen/qwen3-32b',
+      'mixtral-8x7b-32768',
+      'gemma2-9b-it',
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Try Again with Groq Brain Model',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    value: models.contains(_sheetModel) ? _sheetModel : models.first,
+                    decoration: InputDecoration(
+                      labelText: 'Select Brain Model',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    items: models
+                        .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                        .toList(),
+                    onChanged: (v) => setSheetState(() => _sheetModel = v!),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.send),
+                      label: const Text('Re-polish with this Brain'),
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red, foregroundColor: Colors.white),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _rePolishWithModel(context, provider, _sheetModel);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _rePolishWithModel(BuildContext context, NoteProvider provider, String model) async {
+    final prefs = await SharedPreferences.getInstance();
+    final apiKey = prefs.getString('groq_api_key') ?? '';
+    if (apiKey.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please set your Groq API Key in Settings first.'), backgroundColor: Colors.orange),
+        );
+      }
+      return;
+    }
+    provider.setPolishing(true);
+    try {
+      // Direct Groq call — no Pi backend needed.
+      final service = TranscriptionService();
+      final newNote = await service.rePolishDirect(provider.rawTranscript, apiKey, model);
+      provider.updatePolishedNote(newNote);
+      _lastPolished = '';
+      if (mounted) {
+        setState(() { _showTranslated = false; _isEditing = false; });
+        _tabController.animateTo(2);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('\u2728 Re-polished with $model!'), backgroundColor: Colors.blue),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      provider.setPolishing(false);
+    }
+  }
+
+
 
   Widget _buildCopyButton(BuildContext context, String label, String text, {bool isMarkdown = false}) {
     return ElevatedButton.icon(
@@ -1072,6 +1363,56 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
     );
   }
 
+  /// Read-only card: shows MarkdownBody (for polished) or plain Text.
+  Widget _buildReadCard(BuildContext context, String text, {required bool isMarkdown}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: SingleChildScrollView(
+        child: isMarkdown
+            ? MarkdownBody(
+                data: text.isEmpty ? '_No content yet_' : text,
+                styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                  p: const TextStyle(fontSize: 16, height: 1.5),
+                ),
+              )
+            : Text(
+                text.isEmpty ? 'No content yet.' : text,
+                style: const TextStyle(fontSize: 16, height: 1.5),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildEditableCard(BuildContext context, TextEditingController controller,
+      {required void Function(String) onChanged}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        maxLines: null,
+        expands: true,
+        keyboardType: TextInputType.multiline,
+        textAlignVertical: TextAlignVertical.top,
+        style: const TextStyle(fontSize: 16, height: 1.5),
+        decoration: const InputDecoration(
+          border: InputBorder.none,
+          hintText: 'Type here to edit...',
+          contentPadding: EdgeInsets.zero,
+        ),
+      ),
+    );
+  }
+
+  // Legacy read-only card (kept for reference, no longer used)
   Widget _buildTranscriptCard(BuildContext context, String text) {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1080,10 +1421,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
         borderRadius: BorderRadius.circular(20),
       ),
       child: SingleChildScrollView(
-        child: Text(
-          text,
-          style: const TextStyle(fontSize: 16, height: 1.5),
-        ),
+        child: Text(text, style: const TextStyle(fontSize: 16, height: 1.5)),
       ),
     );
   }
@@ -1107,7 +1445,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
   }
 }
 
-enum ProcessingStep { uploading, processing, downloading, completed }
+enum ProcessingStep { uploading, processing, completed }
 
 class TranscribePage extends StatefulWidget {
   final String audioPath;
@@ -1118,9 +1456,19 @@ class TranscribePage extends StatefulWidget {
 }
 
 class _TranscribePageState extends State<TranscribePage> {
-  ProcessingStep _currentStep = ProcessingStep.uploading;
   bool _isProcessing = true;
   String _errorMessage = '';
+  ProcessingStep _currentStep = ProcessingStep.uploading;
+
+  String _selectedModel = 'llama-3.3-70b-versatile';
+  final List<String> _supportedModels = [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'meta-llama/llama-4-scout-17b-16e-instruct',
+    'qwen/qwen3-32b',
+    'mixtral-8x7b-32768',
+    'gemma2-9b-it',
+  ];
 
   @override
   void initState() {
@@ -1137,50 +1485,22 @@ class _TranscribePageState extends State<TranscribePage> {
     });
 
     try {
-      // Simulate the "Uploading" phase for better UX
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (!mounted) return;
-      setState(() {
-        _currentStep = ProcessingStep.processing;
-      });
-
-      final prefs = await SharedPreferences.getInstance();
-      final apiKey = prefs.getString('apiKey') ?? '';
-      final modelName = prefs.getString('modelName') ?? 'gemini-2.5-flash';
-      final isTranslationEnabled = prefs.getBool('isTranslationEnabled') ?? false;
-      final targetLanguage = prefs.getString('targetLanguage') ?? 'English';
       final service = TranscriptionService();
 
-      // Both transcription and translation happen under the "Processing" step
-      final originalResults = await service.processAudio(widget.audioPath, apiKey, modelName);
-      Map<String, String> finalResults = Map.from(originalResults);
+      // Stage 1: Whisper STT — shown as "Uploading"
+      final rawTranscript = await service.transcribe(widget.audioPath);
 
-      if (isTranslationEnabled) {
-        final translatedResults = await service.translateTexts(
-          originalTexts: originalResults,
-          targetLanguage: targetLanguage,
-          apiKey: apiKey,
-          modelName: modelName,
-        );
-        finalResults.addAll(translatedResults);
-      }
-
-      // Move to the "Downloading" phase
+      // Stage 2: LLM Polish — shown as "Processing"
       if (!mounted) return;
-      setState(() {
-        _currentStep = ProcessingStep.downloading;
-      });
-      await Future.delayed(const Duration(milliseconds: 500));
+      setState(() => _currentStep = ProcessingStep.processing);
+      final results = await service.polish(rawTranscript);
 
+      // Stage 3: Done — shown as "Downloading" briefly
       if (!mounted) return;
-      setState(() {
-        _currentStep = ProcessingStep.completed;
-      });
-      await Future.delayed(const Duration(milliseconds: 400));
+      setState(() => _currentStep = ProcessingStep.completed);
+      await Future.delayed(const Duration(milliseconds: 600));
 
-      if (mounted) {
-        Navigator.of(context).pop(finalResults);
-      }
+      if (mounted) Navigator.of(context).pop(results);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -1208,21 +1528,10 @@ class _TranscribePageState extends State<TranscribePage> {
                 ? Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 500),
-                        transitionBuilder: (child, animation) {
-                          return FadeTransition(
-                            opacity: animation,
-                            child: ScaleTransition(scale: animation, child: child),
-                          );
-                        },
-                        child: _currentStep == ProcessingStep.processing
-                            ? const AiBrainAnimation(key: ValueKey('brain'))
-                            : const SizedBox(height: 150, key: ValueKey('placeholder')),
-                      ),
-                      const SizedBox(height: 20),
+                      const AiBrainAnimation(),
+                      const SizedBox(height: 24),
                       ProcessingStepper(currentStep: _currentStep),
-                      const SizedBox(height: 40),
+                      const SizedBox(height: 24),
                       const Text(
                         'Your voice note is being processed. This might take a few moments.',
                         textAlign: TextAlign.center,
@@ -1237,13 +1546,40 @@ class _TranscribePageState extends State<TranscribePage> {
                       const SizedBox(height: 20),
                       const Text('Processing Failed', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 12),
-                      Text(_errorMessage, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
+                      Text(_errorMessage.contains('QUOTA_EXHAUSTED') 
+                        ? 'Quota Exhasted for this AI model. Please switch the model.' 
+                        : _errorMessage, 
+                        textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
                       const SizedBox(height: 20),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      ListTile(
+                        title: const Text('Model Selection'),
+                        subtitle: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: _selectedModel,
+                            isExpanded: true,
+                            items: _supportedModels.map((String value) {
+                              return DropdownMenuItem<String>(
+                                value: value,
+                                child: Text(value),
+                              );
+                            }).toList(),
+                            onChanged: (String? newValue) {
+                              if (newValue != null) {
+                                setState(() {
+                                  _selectedModel = newValue;
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        runSpacing: 8,
                         children: [
                           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Go Back')),
-                          const SizedBox(width: 16),
                           ElevatedButton(
                             onPressed: _startProcessing,
                             style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
@@ -1262,7 +1598,15 @@ class _TranscribePageState extends State<TranscribePage> {
 
 class ProcessingStepper extends StatelessWidget {
   final ProcessingStep currentStep;
-  const ProcessingStepper({super.key, required this.currentStep});
+  final double transcriptionProgress;
+  final String transcriptionLabel;
+  
+  const ProcessingStepper({
+    super.key, 
+    required this.currentStep,
+    this.transcriptionProgress = 0.0,
+    this.transcriptionLabel = '',
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1274,10 +1618,17 @@ class ProcessingStepper extends StatelessWidget {
             _buildStep(context, 'Uploading', ProcessingStep.uploading),
             _buildConnector(ProcessingStep.processing),
             _buildStep(context, 'Processing', ProcessingStep.processing),
-            _buildConnector(ProcessingStep.downloading),
-            _buildStep(context, 'Downloading', ProcessingStep.downloading),
+            _buildConnector(ProcessingStep.completed),
+            _buildStep(context, 'Downloading', ProcessingStep.completed),
           ],
         ),
+        if (transcriptionLabel.isNotEmpty && currentStep == ProcessingStep.processing) ...[
+          const SizedBox(height: 24),
+          Text(
+            transcriptionLabel, 
+            style: const TextStyle(color: Colors.grey, fontSize: 16, fontWeight: FontWeight.bold)
+          ),
+        ],
       ],
     );
   }
@@ -1298,10 +1649,19 @@ class ProcessingStepper extends StatelessWidget {
     if (isCompleted) {
       child = const Icon(Icons.check, color: Colors.white, size: 16);
     } else if (isCurrent) {
-      // Show a progress indicator for the current step
+      // Determine color: Amber if busy/waiting, Green if processing
+      final bool isWaiting = transcriptionLabel.toLowerCase().contains('busy');
+      final Color indicatorColor = isWaiting ? Colors.amber : Colors.green.shade700;
+      
+      // Show a determinate progress indicator for the current step
       child = Padding(
         padding: const EdgeInsets.all(4.0),
-        child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.green.shade700)),
+        child: CircularProgressIndicator(
+          value: (step == ProcessingStep.processing && !isWaiting) ? transcriptionProgress : null,
+          strokeWidth: 3, 
+          valueColor: AlwaysStoppedAnimation<Color>(indicatorColor),
+          backgroundColor: Colors.transparent,
+        ),
       );
     }
 
@@ -1353,22 +1713,24 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  final _apiKeyController = TextEditingController();
-  final _modelNameController = TextEditingController();
 
-  // --- NEW STATE VARIABLES ---
-  bool _isTranslationEnabled = false;
-  String _selectedLanguage = 'English';
-  final List<String> _supportedLanguages = [
-    'Kannada',
-    'English',
-    'Telugu',
-    'Tamil',
-    'Hindi',
-    'Spanish',
-    'French',
-    'German',
-    'Japanese'
+  // --- GROQ STATE VARIABLES ---
+  String _groqApiKey = '';
+  String _selectedSttModel = 'whisper-large-v3';
+  String _selectedLlmModel = 'llama-3.3-70b-versatile';
+
+  final List<String> _groqSttModels = [
+    'whisper-large-v3-turbo',
+    'whisper-large-v3',
+  ];
+
+  final List<String> _groqLlmModels = [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'meta-llama/llama-4-scout-17b-16e-instruct',
+    'qwen/qwen3-32b',
+    'mixtral-8x7b-32768',
+    'gemma2-9b-it',
   ];
 
   @override
@@ -1377,37 +1739,36 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadSettings();
   }
 
-  // --- MODIFIED: Load new settings from storage ---
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     if (mounted) {
       setState(() {
-        _apiKeyController.text = prefs.getString('apiKey') ?? '';
-        _modelNameController.text = prefs.getString('modelName') ?? 'gemini-2.5-flash';
-        _isTranslationEnabled = prefs.getBool('isTranslationEnabled') ?? false;
-        _selectedLanguage = prefs.getString('targetLanguage') ?? 'Kannada';
+        _groqApiKey = prefs.getString('groq_api_key') ?? '';
+        _selectedSttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
+        _selectedLlmModel = prefs.getString('groq_llm_model') ?? 'llama-3.3-70b-versatile';
+        if (!_groqSttModels.contains(_selectedSttModel)) _selectedSttModel = _groqSttModels.first;
+        if (!_groqLlmModels.contains(_selectedLlmModel)) _selectedLlmModel = _groqLlmModels.first;
       });
     }
   }
 
-  // --- MODIFIED: Save new settings to storage ---
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('apiKey', _apiKeyController.text);
-    await prefs.setString('modelName', _modelNameController.text);
-    await prefs.setBool('isTranslationEnabled', _isTranslationEnabled);
-    await prefs.setString('targetLanguage', _selectedLanguage);
+    await prefs.setString('groq_api_key', _groqApiKey);
+    await prefs.setString('groq_stt_model', _selectedSttModel);
+    await prefs.setString('groq_llm_model', _selectedLlmModel);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Settings saved!')),
+        const SnackBar(content: Text('Settings saved! ✅')),
       );
     }
   }
 
+  // _noop — local whisper switching removed in Groq architecture
+  void _noop(String newMode) {}
+
   @override
   void dispose() {
-    _apiKeyController.dispose();
-    _modelNameController.dispose();
     super.dispose();
   }
 
@@ -1427,91 +1788,63 @@ class _SettingsPageState extends State<SettingsPage> {
               _saveSettings();
               FocusScope.of(context).unfocus();
             },
-            tooltip: 'Save All Settings',
+            tooltip: 'Save Settings',
           ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16.0),
         children: [
-          _buildSectionTitle('API Key'),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _apiKeyController,
-            obscureText: true,
-            decoration: InputDecoration(
-              hintText: 'Enter your Gemini API Key',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Get your Google API key from Google AI Studio.',
-            style: TextStyle(color: Colors.grey, fontSize: 12),
-          ),
-          const SizedBox(height: 24),
-          _buildSectionTitle('Model Name'),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _modelNameController,
-            decoration: InputDecoration(
-              hintText: 'Use gemini-2.5-flash',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-
-          // --- NEW TRANSLATION SECTION ---
-          const SizedBox(height: 24),
-          _buildSectionTitle('Translation'),
+          _buildSectionTitle('AI Configuration (Groq)'),
           const SizedBox(height: 8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: Colors.grey.shade400, width: 1),
             ),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SwitchListTile(
-                  title: const Text('Enable Translation'),
-                  value: _isTranslationEnabled,
-                  onChanged: (bool value) {
-                    setState(() {
-                      _isTranslationEnabled = value;
-                    });
-                  },
-                  activeColor: Colors.red,
-                  contentPadding: EdgeInsets.zero,
-                ),
-                if (_isTranslationEnabled) ...[
-                  const Divider(height: 1),
-                  DropdownButtonFormField<String>(
-                    value: _selectedLanguage,
-                    decoration: const InputDecoration(
-                      labelText: 'Target Language',
-                      border: InputBorder.none,
-                    ),
-                    items: _supportedLanguages.map((String language) {
-                      return DropdownMenuItem<String>(
-                        value: language,
-                        child: Text(language),
-                      );
-                    }).toList(),
-                    onChanged: (String? newValue) {
-                      setState(() {
-                        _selectedLanguage = newValue!;
-                      });
-                    },
+                const Text('Groq API Key', style: TextStyle(fontSize: 14, color: Colors.grey)),
+                TextField(
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    hintText: 'Paste your Groq API key here',
+                    border: InputBorder.none,
+                    isDense: true,
                   ),
-                ]
+                  onChanged: (value) => _groqApiKey = value,
+                  controller: TextEditingController(text: _groqApiKey)
+                    ..selection = TextSelection.collapsed(offset: _groqApiKey.length),
+                ),
+                const Divider(height: 16),
+                DropdownButtonFormField<String>(
+                  value: _selectedSttModel,
+                  decoration: const InputDecoration(
+                    labelText: '🎙️ Speech-to-Text Model',
+                    border: InputBorder.none,
+                  ),
+                  items: _groqSttModels
+                      .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                      .toList(),
+                  onChanged: (v) => setState(() => _selectedSttModel = v!),
+                ),
+                const Divider(height: 16),
+                DropdownButtonFormField<String>(
+                  value: _selectedLlmModel,
+                  decoration: const InputDecoration(
+                    labelText: '🧠 Brain (LLM) Model',
+                    border: InputBorder.none,
+                  ),
+                  items: _groqLlmModels
+                      .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                      .toList(),
+                  onChanged: (v) => setState(() => _selectedLlmModel = v!),
+                ),
               ],
             ),
           ),
-
           const SizedBox(height: 24),
           _buildSectionTitle('Theme'),
           const SizedBox(height: 8),
@@ -1563,7 +1896,7 @@ class _SettingsPageState extends State<SettingsPage> {
             children: [
               Icon(icon, color: isSelected ? colorScheme.primary : Colors.grey),
               const SizedBox(height: 8),
-              Text(title, style: TextStyle(color: isSelected ? colorScheme.primary : Colors.grey)),
+              Text(title, textAlign: TextAlign.center, style: TextStyle(color: isSelected ? colorScheme.primary : Colors.grey)),
             ],
           ),
         ),
@@ -1575,110 +1908,146 @@ class _SettingsPageState extends State<SettingsPage> {
 // --- Services ---
 
 class TranscriptionService {
-  // This method ONLY transcribes now.
-  Future<Map<String, String>> processAudio(String audioPath, String apiKey, String modelName) async {
+  static const String _groqBaseUrl = 'https://api.groq.com/openai/v1';
+
+  static const String _polishSystemPrompt =
+      'You are a professional secretary and expert note-taker. '
+      'Your task is to transform a raw voice transcript into a clean, well-organized, professional Markdown note. '
+      'Fix any technical or phonetic errors (e.g. Aadhar, Raspberry Pi, mAadhaar, VID, PVC). '
+      'Remove filler words (um, uh, like, you know) and clean up jargon. '
+      '\n\nOutput structure (strictly follow this):\n'
+      '1. Start with a single # heading that captures the main context or topic of the entire audio.\n'
+      '2. Use ## subheadings to divide the content into logical sections.\n'
+      '3. Under each subheading, present the information as clear, concise bullet points (-).\n'
+      '4. Bold (**) all key terms, names, decisions, and important concepts.\n'
+      '\nOutput ONLY the Markdown. Do not wrap in triple backticks. Do not add any preamble or explanation.';
+
+
+  /// Main entry point: 2 API calls — Whisper STT → Groq LLM Polish.
+  Future<Map<String, String>> processNote(String audioPath) async {
+    final prefs = await SharedPreferences.getInstance();
+    final apiKey = prefs.getString('groq_api_key') ?? '';
+    final sttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
+    final llmModel = prefs.getString('groq_llm_model') ?? 'llama-3.3-70b-versatile';
+
     if (apiKey.isEmpty) {
-      throw Exception('API Key is missing. Please add it in Settings.');
+      throw Exception('Groq API Key is not set. Please add it in Settings.');
     }
 
-    final model = GenerativeModel(model: modelName, apiKey: apiKey);
+    // Stage 1: Whisper STT (API Call 1)
+    final rawTranscript = await _callWhisper(audioPath, apiKey, sttModel);
 
-    final prompt = '''
-You are an AI assistant for a voice note app. Process the attached audio file and provide three distinct outputs in a single, valid JSON object.
-
-The JSON object must have these exact keys: "rawTranscript", "cleanedTranscript", and "polishedNote".
-
-1.  **rawTranscript**: Provide a direct, accurate transcription of the audio.
-2.  **cleanedTranscript**: Take the raw transcript, remove filler words (like "um", "uh"), correct obvious grammar mistakes, and fix punctuation.
-3.  **polishedNote**: Transform the cleaned transcript into a well-structured markdown note.
-
-Return only the raw JSON object.
-''';
-
-    final audioFile = File(audioPath);
-    final audioBytes = await audioFile.readAsBytes();
-    final parts = [
-      TextPart(prompt),
-      DataPart('audio/mpeg', audioBytes),
-    ];
-
-    try {
-      final response = await model.generateContent([Content.multi(parts)]);
-      final responseText = response.text;
-
-      if (responseText == null) {
-        throw Exception('Received an empty response from the AI model.');
-      }
-
-      final cleanedJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
-      final decodedJson = jsonDecode(cleanedJson) as Map<String, dynamic>;
-
-      if (!decodedJson.containsKey('rawTranscript') ||
-          !decodedJson.containsKey('cleanedTranscript') ||
-          !decodedJson.containsKey('polishedNote')) {
-        throw Exception('The AI response is missing required data. Please try again.');
-      }
-
+    if (rawTranscript.trim().length < 3) {
       return {
-        'rawTranscript': decodedJson['rawTranscript'] as String,
-        'cleanedTranscript': decodedJson['cleanedTranscript'] as String,
-        'polishedNote': decodedJson['polishedNote'] as String,
+        'rawTranscript': 'No speech detected.',
+        'cleanedTranscript': 'No speech detected.',
+        'polishedNote': 'No speech was detected in the recording. Please try again.',
       };
-    } on GenerativeAIException catch (e) {
-      if (e.message.contains('Unhandled format for Content')) {
-        throw Exception('There was an issue with the audio format. Please try recording again.');
-      }
-      throw Exception('AI model error: ${e.message}');
-    } catch (e) {
-      throw Exception('An unexpected error occurred while processing the note: $e');
     }
+
+    // Stage 2: LLM Polish (API Call 2)
+    final polishedNote = await _callGroqLLM(rawTranscript, apiKey, llmModel);
+
+    return {
+      'rawTranscript': rawTranscript,
+      'cleanedTranscript': rawTranscript, // same as raw — Whisper output is already clean
+      'polishedNote': polishedNote,
+    };
   }
 
-  // --- NEW METHOD FOR TRANSLATION ---
-  Future<Map<String, String>> translateTexts({
-    required Map<String, String> originalTexts,
-    required String targetLanguage,
-    required String apiKey,
-    required String modelName,
-  }) async {
-    final model = GenerativeModel(model: modelName, apiKey: apiKey);
+  /// Stage 1 (public): Transcribe audio using Groq Whisper.
+  Future<String> transcribe(String audioPath) async {
+    final prefs = await SharedPreferences.getInstance();
+    final apiKey = prefs.getString('groq_api_key') ?? '';
+    final sttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
+    if (apiKey.isEmpty) throw Exception('Groq API Key is not set. Please add it in Settings.');
+    return _callWhisper(audioPath, apiKey, sttModel);
+  }
 
-    final prompt = '''
-You are an expert translator. I will provide a JSON object with three texts: "rawTranscript", "cleanedTranscript", and "polishedNote".
-Your task is to translate all three of them into **$targetLanguage**.
-
-Return a single, valid JSON object with these exact keys: "raw_translated", "cleaned_translated", and "polished_translated".
-
-Do not add any explanations or conversational text. Return only the raw JSON object.
-''';
-
-    // Combine prompt with the texts to be translated
-    final content = [
-      Content.text(prompt),
-      Content.text('Here is the JSON to translate: ${jsonEncode(originalTexts)}'),
-    ];
-
-    try {
-      final response = await model.generateContent(content);
-      final responseText = response.text;
-
-      if (responseText == null) {
-        throw Exception('Received an empty response from the AI model during translation.');
-      }
-
-      final cleanedJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
-      final decodedJson = jsonDecode(cleanedJson) as Map<String, dynamic>;
-
+  /// Stage 2 (public): Polish transcript using Groq LLM.
+  Future<Map<String, String>> polish(String rawTranscript) async {
+    final prefs = await SharedPreferences.getInstance();
+    final apiKey = prefs.getString('groq_api_key') ?? '';
+    final llmModel = prefs.getString('groq_llm_model') ?? 'llama-3.3-70b-versatile';
+    if (apiKey.isEmpty) throw Exception('Groq API Key is not set. Please add it in Settings.');
+    if (rawTranscript.trim().length < 3) {
       return {
-        'raw_translated': decodedJson['raw_translated'] as String? ?? '',
-        'cleaned_translated': decodedJson['cleaned_translated'] as String? ?? '',
-        'polished_translated': decodedJson['polished_translated'] as String? ?? '',
+        'rawTranscript': 'No speech detected.',
+        'cleanedTranscript': 'No speech detected.',
+        'polishedNote': 'No speech was detected in the recording. Please try again.',
       };
-    } catch (e) {
-      throw Exception('An unexpected error occurred during translation: $e');
     }
+    final polishedNote = await _callGroqLLM(rawTranscript, apiKey, llmModel);
+    return {
+      'rawTranscript': rawTranscript,
+      'cleanedTranscript': rawTranscript,
+      'polishedNote': polishedNote,
+    };
+  }
+
+  Future<String> _callWhisper(String audioPath, String apiKey, String sttModel) async {
+    final url = Uri.parse('$_groqBaseUrl/audio/transcriptions');
+    final filename = audioPath.split('/').last;
+
+    final file = await http.MultipartFile.fromPath('file', audioPath, filename: filename);
+    final request = http.MultipartRequest('POST', url)
+      ..headers['Authorization'] = 'Bearer $apiKey'
+      ..fields['model'] = sttModel
+      ..fields['response_format'] = 'text'
+      ..files.add(file);
+
+    final streamed = await request.send().timeout(const Duration(seconds: 60));
+    final response = await http.Response.fromStream(streamed);
+
+    if (response.statusCode == 200) return response.body.trim();
+    if (response.statusCode == 401) throw Exception('Invalid Groq API Key. Please check Settings.');
+    if (response.statusCode == 429) throw Exception('QUOTA_EXHAUSTED: Groq STT quota reached.');
+    throw Exception('Groq Whisper error (${response.statusCode}): ${response.body}');
+  }
+
+  Future<String> _callGroqLLM(String transcript, String apiKey, String llmModel) async {
+    final url = Uri.parse('$_groqBaseUrl/chat/completions');
+    final response = await http
+        .post(
+          url,
+          headers: {
+            'Authorization': 'Bearer $apiKey',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'model': llmModel,
+            'messages': [
+              {'role': 'system', 'content': _polishSystemPrompt},
+              {'role': 'user', 'content': 'PROCESS THIS TRANSCRIPT:\n\n$transcript'},
+            ],
+            'temperature': 0.3,
+            'max_tokens': 4096,
+          }),
+        )
+        .timeout(const Duration(seconds: 60));
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      String content = data['choices'][0]['message']['content'].toString().trim();
+      if (content.startsWith('```')) {
+        final lines = content.split('\n');
+        final stripped = lines.skip(1).toList();
+        if (stripped.isNotEmpty && stripped.last.startsWith('```')) stripped.removeLast();
+        content = stripped.join('\n').trim();
+      }
+      return content;
+    }
+    if (response.statusCode == 401) throw Exception('Invalid Groq API Key. Please check Settings.');
+    if (response.statusCode == 429) throw Exception('QUOTA_EXHAUSTED: Groq LLM quota reached. Try switching Brain model.');
+    throw Exception('Groq LLM error (${response.statusCode}): ${response.body}');
+  }
+
+  /// Re-polish raw transcript directly via Groq (for the ✨ Try Again button).
+  Future<String> rePolishDirect(String rawTranscript, String apiKey, String llmModel) async {
+    return _callGroqLLM(rawTranscript, apiKey, llmModel);
   }
 }
+
 
 // --- NEW AI BRAIN ANIMATION WIDGET ---
 

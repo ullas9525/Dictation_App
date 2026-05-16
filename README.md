@@ -1,13 +1,12 @@
 # AI-Powered Dictation and Summarization App
 
-## 📌 What This App Does
-Talking is easy, but going through raw audio recordings is a pain. This app makes life simple:
-- Record your thoughts, ideas, or meeting notes.
-- Let AI **transcribe** your voice into text.
-- Get a **clean version** without fillers and mistakes.
-- Receive a **polished summary** that highlights key points.
+## 🎙️ What This App Does
+Talking is easy, but organizing raw thoughts is a pain. **AI-Powered Dictation and Summarization App** turns your voice into structured, professional knowledge in seconds.
 
-So instead of scrolling through messy recordings, you instantly get well-structured notes you can read, share, and act on.
+- **Record** your thoughts, ideas, or meeting notes with zero latency.
+- **Transcribe** instantly using Groq's LPU-powered Whisper engine.
+- **Polish** with a high-capacity LLM "Secretary" that fixes jargon, removes fillers, and organizes your notes.
+- **Structured Output**: Get high-quality Markdown notes with clear headings and bullet points.
 
 ---
 
@@ -18,11 +17,11 @@ So instead of scrolling through messy recordings, you instantly get well-structu
 
 ### Why This Matters
 This process is:
-- ⏱ **Takes less time** – instantly turns speech into text.  
-- ✅ **More perfect** – AI corrects mistakes and fillers.  
-- 🔒 **More reliable** – keeps your dictation accurate and safe.  
-- 🙌 **More easy** – no typing, just speak and let the app do the rest.  
-- 🧠 **More understandable** – summaries highlight key points for quick reading.  
+- ⏱ **Instant Transcription** – Instantly turns speech into text.  
+- ✅ **More Perfect** – AI corrects mistakes and fillers.  
+- 🔒 **More Reliable** – Keeps your dictation accurate and safe.  
+- 🙌 **More Easy** – No typing, just speak and let the app do the rest.  
+- 🧠 **More Understandable** – Summaries highlight key points for quick reading.  
 
 Overall, the process takes very little time while ensuring clarity, efficiency, and usability for everyone.
 
@@ -33,46 +32,52 @@ Because professionals, students, and creators are always on the go. Voice notes 
 
 ---
 
-## 🚀 Main Features
-- 🎙 **Easy Recording**: Simple start/stop UI with timer + waveform visualizer.
-- 🎧 **Mic Selection**: Choose built-in or headset mic for better audio.
-- 🔑 **Secure API Key Storage**: Your Google Gemini key stays safe on your device.
-- ⚡ **AI Processing**: Transcription → Cleanup → Summary (shown in a progress stepper).
-- 📝 **Three Outputs**:
-  - Raw transcript (exact words)
-  - Clean text (readable & corrected)
-  - Polished summary (structured & shareable)
+## ✨ Features
+- 🎙 **Instant Recording**: Minimalist UI with waveform visualizer and immediate startup.
+- 🧠 **AI Brain Animation**: Premium high-end feedback during processing.
+- 🔑 **Secure API Key Storage**: Your Groq key stays safe on your device.
+- 📊 **Staged Progress**: Real-time tracking through **Uploading → Processing → Downloading**.
+- 📝 **Triple View Tabs**:
+  - **Raw Transcript**: Your exact spoken words.
+  - **Cleaned Text**: A readable version of the transcript.
+  - **Polished Note**: Professional Markdown with headings (#) and sections (##).
+- 🔄 **Sparkle ✨ Re-polish**: Didn't like the result? Re-process with a different LLM instantly.
 
 ---
 
 ## 📦 Tech Stack
 - **Flutter** (cross-platform mobile)
-- **Provider** (state management)
-- **Google Gemini AI** (transcription + summarization)
-- **Material 3 Design** (modern UI, dark/light mode)
+- **Framework**: Flutter (Material 3)
+- **AI Infrastructure**: Groq Cloud (LPU Inference)
+- **State Management**: Provider
+- **Persistence**: SharedPreferences
+- **Markdown Rendering**: Flutter Markdown
 
 ---
 
-## 📖 Setup Guide
-1. Clone this repo:
+## 🛠️ Setup Guide
+1. **Clone the Repo**:
    ```bash
    git clone https://github.com/ullas9525/Dictation_App.git
    cd Dictation_App
    ```
-2. Install dependencies:
+2. **Install Dependencies**:
    ```bash
    flutter pub get
    ```
-3. Run the app:
+3. **Groq API Key**:
+   - Get your key at [console.groq.com](https://console.groq.com).
+   - Open the app → **Settings** → Paste your **Groq API Key**.
+4. **Run**:
    ```bash
-   flutter run
+   flutter run --release
    ```
 
 ---
 
 ## 🔐 API Key Setup
-1. Get your **Google Gemini API Key** from [Google AI Studio](https://makersuite.google.com/).
-2. Enter it in the app under **API Settings**.
+1. Get your **Groq API Key** from [console.groq.com](https://console.groq.com/).
+2. Enter it in the app under **Settings** → **API Settings**.
 3. It stays **securely on your device**.
 
 ---
@@ -82,5 +87,5 @@ Because professionals, students, and creators are always on the go. Voice notes 
 
 ---
 
-## License
-This project is licensed under the MIT License. You can find the full license text in the LICENSE file.
+## 📜 License
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
