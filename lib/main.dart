@@ -1719,6 +1719,10 @@ class _SettingsPageState extends State<SettingsPage> {
   String _selectedSttModel = 'whisper-large-v3';
   String _selectedLlmModel = 'llama-3.3-70b-versatile';
 
+  // --- TRANSLATION VARIABLES ---
+  bool _enableTranslation = false;
+  String _selectedTargetLanguage = 'English';
+
   final List<String> _groqSttModels = [
     'whisper-large-v3-turbo',
     'whisper-large-v3',
@@ -1731,6 +1735,17 @@ class _SettingsPageState extends State<SettingsPage> {
     'qwen/qwen3-32b',
     'mixtral-8x7b-32768',
     'gemma2-9b-it',
+  ];
+
+  final List<String> _targetLanguages = [
+    'English',
+    'Hindi',
+    'Kannada',
+    'Telugu',
+    'Tamil',
+    'Malayalam',
+    'Marathi',
+    'Bengali',
   ];
 
   @override
@@ -1746,8 +1761,12 @@ class _SettingsPageState extends State<SettingsPage> {
         _groqApiKey = prefs.getString('groq_api_key') ?? '';
         _selectedSttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
         _selectedLlmModel = prefs.getString('groq_llm_model') ?? 'llama-3.3-70b-versatile';
+        _enableTranslation = prefs.getBool('enable_translation') ?? false;
+        _selectedTargetLanguage = prefs.getString('target_language') ?? 'English';
+        
         if (!_groqSttModels.contains(_selectedSttModel)) _selectedSttModel = _groqSttModels.first;
         if (!_groqLlmModels.contains(_selectedLlmModel)) _selectedLlmModel = _groqLlmModels.first;
+        if (!_targetLanguages.contains(_selectedTargetLanguage)) _selectedTargetLanguage = _targetLanguages.first;
       });
     }
   }
@@ -1757,6 +1776,8 @@ class _SettingsPageState extends State<SettingsPage> {
     await prefs.setString('groq_api_key', _groqApiKey);
     await prefs.setString('groq_stt_model', _selectedSttModel);
     await prefs.setString('groq_llm_model', _selectedLlmModel);
+    await prefs.setBool('enable_translation', _enableTranslation);
+    await prefs.setString('target_language', _selectedTargetLanguage);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Settings saved! ✅')),
@@ -1842,6 +1863,39 @@ class _SettingsPageState extends State<SettingsPage> {
                       .toList(),
                   onChanged: (v) => setState(() => _selectedLlmModel = v!),
                 ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          _buildSectionTitle('Translation'),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade400, width: 1),
+            ),
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('Enable Translation'),
+                  subtitle: const Text('Translate polished notes'),
+                  value: _enableTranslation,
+                  onChanged: (bool value) {
+                    setState(() {
+                      _enableTranslation = value;
+                    });
+                  },
+                ),
+                if (_enableTranslation)
+                  DropdownButtonFormField<String>(
+                    value: _selectedTargetLanguage,
+                    decoration: const InputDecoration(labelText: 'Target Language'),
+                    items: _targetLanguages
+                        .map((lang) => DropdownMenuItem(value: lang, child: Text(lang)))
+                        .toList(),
+                    onChanged: (v) => setState(() => _selectedTargetLanguage = v!),
+                  ),
               ],
             ),
           ),
@@ -2006,6 +2060,21 @@ class TranscriptionService {
   }
 
   Future<String> _callGroqLLM(String transcript, String apiKey, String llmModel) async {
+    final prefs = await SharedPreferences.getInstance();
+    bool translate = prefs.getBool('enable_translation') ?? false;
+    String targetedLanguage = prefs.getString('target_language') ?? 'English';
+
+    String systemPrompt = "";
+
+    if (translate == false) {
+      // normal prompt now which it is exists
+      // The prompt already says: "Remove filler words... and clean up jargon"
+      systemPrompt = _polishSystemPrompt;
+    } else {
+      // normal prompt + translate to {Targeted_Language} 
+      systemPrompt = _polishSystemPrompt + '\n\nAlso, translate the entire cleaned and structured output into $targetedLanguage. Ensure the final note is written completely in $targetedLanguage.';
+    }
+
     final url = Uri.parse('$_groqBaseUrl/chat/completions');
     final response = await http
         .post(
@@ -2017,7 +2086,7 @@ class TranscriptionService {
           body: jsonEncode({
             'model': llmModel,
             'messages': [
-              {'role': 'system', 'content': _polishSystemPrompt},
+              {'role': 'system', 'content': systemPrompt},
               {'role': 'user', 'content': 'PROCESS THIS TRANSCRIPT:\n\n$transcript'},
             ],
             'temperature': 0.3,
