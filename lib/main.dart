@@ -1237,21 +1237,38 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
     );
   }
 
-  // --- Try Again with Groq Brain Model ---
+  // --- Try Again with OpenRouter Brain Model ---
   void _showTryAgainSheet(BuildContext context, NoteProvider provider) {
-    String _sheetModel = 'llama-3.3-70b-versatile';
-    SharedPreferences.getInstance().then((prefs) {
-      _sheetModel = prefs.getString('groq_llm_model') ?? 'llama-3.3-70b-versatile';
-    });
-
+    String _sheetModel = 'meta-llama/llama-3.2-3b-instruct:free';
     final List<String> models = [
-      'llama-3.3-70b-versatile',
-      'llama-3.1-8b-instant',
-      'meta-llama/llama-4-scout-17b-16e-instruct',
-      'qwen/qwen3-32b',
-      'mixtral-8x7b-32768',
-      'gemma2-9b-it',
+      'cohere/north-mini-code:free',
+      'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+      'google/gemma-4-26b-a4b-it:free',
+      'google/gemma-4-31b-it:free',
+      'liquid/lfm-2.5-1.2b-instruct:free',
+      'liquid/lfm-2.5-1.2b-thinking:free',
+      'meta-llama/llama-3.2-3b-instruct:free',
+      'meta-llama/llama-3.3-70b-instruct:free',
+      'nousresearch/hermes-3-llama-3.1-405b:free',
+      'nvidia/llama-nemotron-embed-vl-1b-v2:free',
+      'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
+      'nvidia/nemotron-3-nano-30b-a3b:free',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+      'nvidia/nemotron-3-super-120b-a12b:free',
+      'nvidia/nemotron-3-ultra-550b-a55b:free',
+      'nvidia/nemotron-3.5-content-safety:free',
+      'nvidia/nemotron-nano-9b-v2:free',
+      'nvidia/nemotron-nano-12b-v2-vl:free',
+      'openai/gpt-oss-20b:free',
+      'openai/gpt-oss-120b:free',
+      'poolside/laguna-xs.2:free',
+      'poolside/laguna-m.1:free',
+      'qwen/qwen3-coder:free',
+      'qwen/qwen3-next-80b-a3b-instruct:free',
     ];
+    SharedPreferences.getInstance().then((prefs) {
+      _sheetModel = prefs.getString('openrouter_model') ?? 'meta-llama/llama-3.2-3b-instruct:free';
+    });
 
     showModalBottomSheet(
       context: context,
@@ -1267,13 +1284,13 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Try Again with Groq Brain Model',
+                  const Text('Try Again with OpenRouter Brain Model',
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
-                    value: models.contains(_sheetModel) ? _sheetModel : models.first,
+                    value: models.contains(_sheetModel) ? _sheetModel : (models.isNotEmpty ? models.first : null),
                     decoration: InputDecoration(
-                      labelText: 'Select Brain Model',
+                      labelText: 'Select OpenRouter Model',
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     items: models
@@ -1307,27 +1324,37 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
 
   Future<void> _rePolishWithModel(BuildContext context, NoteProvider provider, String model) async {
     final prefs = await SharedPreferences.getInstance();
-    final apiKey = prefs.getString('groq_api_key') ?? '';
-    if (apiKey.isEmpty) {
+    final orKey = prefs.getString('openrouter_api_key') ?? '';
+    final nvKey = prefs.getString('nvidia_api_key') ?? '';
+    if (orKey.isEmpty && nvKey.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please set your Groq API Key in Settings first.'), backgroundColor: Colors.orange),
+          const SnackBar(content: Text('Please set an LLM API Key (OpenRouter or NVIDIA) in Settings first.'), backgroundColor: Colors.orange),
         );
       }
       return;
     }
     provider.setPolishing(true);
     try {
-      // Direct Groq call — no Pi backend needed.
       final service = TranscriptionService();
-      final newNote = await service.rePolishDirect(provider.rawTranscript, apiKey, model);
+      String newNote;
+      try {
+        newNote = await service.rePolishDirect(provider.rawTranscript, orKey, model);
+      } catch (e) {
+        final msg = e.toString();
+        if ((msg.contains('429') || msg.contains('QUOTA_EXHAUSTED') || msg.contains('rate limit') || msg.contains('quota')) && nvKey.isNotEmpty) {
+          newNote = await service.rePolishNVIDIA(provider.rawTranscript, nvKey);
+        } else {
+          rethrow;
+        }
+      }
       provider.updatePolishedNote(newNote);
       _lastPolished = '';
       if (mounted) {
         setState(() { _showTranslated = false; _isEditing = false; });
         _tabController.animateTo(2);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('\u2728 Re-polished with $model!'), backgroundColor: Colors.blue),
+          const SnackBar(content: Text('\u2728 Re-polished!'), backgroundColor: Colors.blue),
         );
       }
     } catch (e) {
@@ -1460,14 +1487,32 @@ class _TranscribePageState extends State<TranscribePage> {
   String _errorMessage = '';
   ProcessingStep _currentStep = ProcessingStep.uploading;
 
-  String _selectedModel = 'llama-3.3-70b-versatile';
+  String _selectedModel = 'meta-llama/llama-3.2-3b-instruct:free';
   final List<String> _supportedModels = [
-    'llama-3.3-70b-versatile',
-    'llama-3.1-8b-instant',
-    'meta-llama/llama-4-scout-17b-16e-instruct',
-    'qwen/qwen3-32b',
-    'mixtral-8x7b-32768',
-    'gemma2-9b-it',
+    'cohere/north-mini-code:free',
+    'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+    'google/gemma-4-26b-a4b-it:free',
+    'google/gemma-4-31b-it:free',
+    'liquid/lfm-2.5-1.2b-instruct:free',
+    'liquid/lfm-2.5-1.2b-thinking:free',
+    'meta-llama/llama-3.2-3b-instruct:free',
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'nousresearch/hermes-3-llama-3.1-405b:free',
+    'nvidia/llama-nemotron-embed-vl-1b-v2:free',
+    'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
+    'nvidia/nemotron-3-nano-30b-a3b:free',
+    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+    'nvidia/nemotron-3-super-120b-a12b:free',
+    'nvidia/nemotron-3-ultra-550b-a55b:free',
+    'nvidia/nemotron-3.5-content-safety:free',
+    'nvidia/nemotron-nano-9b-v2:free',
+    'nvidia/nemotron-nano-12b-v2-vl:free',
+    'openai/gpt-oss-20b:free',
+    'openai/gpt-oss-120b:free',
+    'poolside/laguna-xs.2:free',
+    'poolside/laguna-m.1:free',
+    'qwen/qwen3-coder:free',
+    'qwen/qwen3-next-80b-a3b-instruct:free',
   ];
 
   @override
@@ -1714,10 +1759,59 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
 
-  // --- GROQ STATE VARIABLES ---
+  // --- GROQ STATE (STT only) ---
   String _groqApiKey = '';
   String _selectedSttModel = 'whisper-large-v3';
-  String _selectedLlmModel = 'llama-3.3-70b-versatile';
+
+  // --- LLM PROVIDER STATE ---
+  String _openRouterApiKey = '';
+  String _nvidiaApiKey = '';
+  String _primaryApi = 'openrouter'; // 'openrouter' or 'nvidia'
+  String _selectedOpenRouterModel = 'meta-llama/llama-3.2-3b-instruct:free';
+
+  String _selectedNvidiaModel = 'deepseek-ai/deepseek-v4-flash';
+
+  final List<String> _nvidiaModels = [
+    'deepseek-ai/deepseek-v4-flash',
+    'deepseek-ai/deepseek-v4-pro',
+    'google/gemma-3-27b-it',
+    'google/gemma-4-31b-it',
+    'nvidia/llama-3.3-nemotron-super-49b-v1.5',
+    'nvidia/nemotron-3-nano-30b-a3b',
+    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'nvidia/nemotron-3-super-120b-a12b',
+    'nvidia/nemotron-3.5-content-safety',
+    'nvidia/nvidia-nemotron-nano-9b-v2',
+    'openai/gpt-oss-20b',
+    'openai/gpt-oss-120b',
+  ];
+
+  final List<String> _openRouterModels = [
+    'cohere/north-mini-code:free',
+    'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+    'google/gemma-4-26b-a4b-it:free',
+    'google/gemma-4-31b-it:free',
+    'liquid/lfm-2.5-1.2b-instruct:free',
+    'liquid/lfm-2.5-1.2b-thinking:free',
+    'meta-llama/llama-3.2-3b-instruct:free',
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'nousresearch/hermes-3-llama-3.1-405b:free',
+    'nvidia/llama-nemotron-embed-vl-1b-v2:free',
+    'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
+    'nvidia/nemotron-3-nano-30b-a3b:free',
+    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+    'nvidia/nemotron-3-super-120b-a12b:free',
+    'nvidia/nemotron-3-ultra-550b-a55b:free',
+    'nvidia/nemotron-3.5-content-safety:free',
+    'nvidia/nemotron-nano-9b-v2:free',
+    'nvidia/nemotron-nano-12b-v2-vl:free',
+    'openai/gpt-oss-20b:free',
+    'openai/gpt-oss-120b:free',
+    'poolside/laguna-xs.2:free',
+    'poolside/laguna-m.1:free',
+    'qwen/qwen3-coder:free',
+    'qwen/qwen3-next-80b-a3b-instruct:free',
+  ];
 
   // --- TRANSLATION VARIABLES ---
   bool _enableTranslation = false;
@@ -1726,15 +1820,6 @@ class _SettingsPageState extends State<SettingsPage> {
   final List<String> _groqSttModels = [
     'whisper-large-v3-turbo',
     'whisper-large-v3',
-  ];
-
-  final List<String> _groqLlmModels = [
-    'llama-3.3-70b-versatile',
-    'llama-3.1-8b-instant',
-    'meta-llama/llama-4-scout-17b-16e-instruct',
-    'qwen/qwen3-32b',
-    'mixtral-8x7b-32768',
-    'gemma2-9b-it',
   ];
 
   final List<String> _targetLanguages = [
@@ -1760,12 +1845,17 @@ class _SettingsPageState extends State<SettingsPage> {
       setState(() {
         _groqApiKey = prefs.getString('groq_api_key') ?? '';
         _selectedSttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
-        _selectedLlmModel = prefs.getString('groq_llm_model') ?? 'llama-3.3-70b-versatile';
+        _openRouterApiKey = prefs.getString('openrouter_api_key') ?? '';
+        _nvidiaApiKey = prefs.getString('nvidia_api_key') ?? '';
+        _primaryApi = prefs.getString('primary_api') ?? 'openrouter';
+        _selectedNvidiaModel = prefs.getString('nvidia_model') ?? 'deepseek-ai/deepseek-v4-flash';
+        _selectedOpenRouterModel = prefs.getString('openrouter_model') ?? 'meta-llama/llama-3.2-3b-instruct:free';
         _enableTranslation = prefs.getBool('enable_translation') ?? false;
         _selectedTargetLanguage = prefs.getString('target_language') ?? 'English';
         
         if (!_groqSttModels.contains(_selectedSttModel)) _selectedSttModel = _groqSttModels.first;
-        if (!_groqLlmModels.contains(_selectedLlmModel)) _selectedLlmModel = _groqLlmModels.first;
+        if (!_openRouterModels.contains(_selectedOpenRouterModel)) _selectedOpenRouterModel = _openRouterModels.first;
+        if (!_nvidiaModels.contains(_selectedNvidiaModel)) _selectedNvidiaModel = _nvidiaModels.first;
         if (!_targetLanguages.contains(_selectedTargetLanguage)) _selectedTargetLanguage = _targetLanguages.first;
       });
     }
@@ -1775,7 +1865,11 @@ class _SettingsPageState extends State<SettingsPage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('groq_api_key', _groqApiKey);
     await prefs.setString('groq_stt_model', _selectedSttModel);
-    await prefs.setString('groq_llm_model', _selectedLlmModel);
+    await prefs.setString('openrouter_api_key', _openRouterApiKey);
+    await prefs.setString('nvidia_api_key', _nvidiaApiKey);
+    await prefs.setString('primary_api', _primaryApi);
+    await prefs.setString('nvidia_model', _selectedNvidiaModel);
+    await prefs.setString('openrouter_model', _selectedOpenRouterModel);
     await prefs.setBool('enable_translation', _enableTranslation);
     await prefs.setString('target_language', _selectedTargetLanguage);
     if (mounted) {
@@ -1785,8 +1879,7 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  // _noop — local whisper switching removed in Groq architecture
-  void _noop(String newMode) {}
+
 
   @override
   void dispose() {
@@ -1816,7 +1909,7 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16.0),
         children: [
-          _buildSectionTitle('AI Configuration (Groq)'),
+          _buildSectionTitle('AI Configuration'),
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1827,7 +1920,7 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Groq API Key', style: TextStyle(fontSize: 14, color: Colors.grey)),
+                const Text('Groq API Key (for STT)', style: TextStyle(fontSize: 14, color: Colors.grey)),
                 TextField(
                   obscureText: true,
                   decoration: const InputDecoration(
@@ -1843,7 +1936,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 DropdownButtonFormField<String>(
                   value: _selectedSttModel,
                   decoration: const InputDecoration(
-                    labelText: '🎙️ Speech-to-Text Model',
+                    labelText: '🎙️ Speech-to-Text (Groq Whisper)',
                     border: InputBorder.none,
                   ),
                   items: _groqSttModels
@@ -1851,17 +1944,128 @@ class _SettingsPageState extends State<SettingsPage> {
                       .toList(),
                   onChanged: (v) => setState(() => _selectedSttModel = v!),
                 ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          _buildSectionTitle('OpenRouter (LLM Brain)'),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade400, width: 1),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('OpenRouter API Key', style: TextStyle(fontSize: 14, color: Colors.grey)),
+                TextField(
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    hintText: 'Paste your OpenRouter API key here',
+                    border: InputBorder.none,
+                    isDense: true,
+                  ),
+                  onChanged: (value) => _openRouterApiKey = value,
+                  controller: TextEditingController(text: _openRouterApiKey)
+                    ..selection = TextSelection.collapsed(offset: _openRouterApiKey.length),
+                ),
                 const Divider(height: 16),
                 DropdownButtonFormField<String>(
-                  value: _selectedLlmModel,
+                  value: _openRouterModels.contains(_selectedOpenRouterModel) ? _selectedOpenRouterModel : _openRouterModels.first,
                   decoration: const InputDecoration(
                     labelText: '🧠 Brain (LLM) Model',
                     border: InputBorder.none,
+                    isDense: true,
                   ),
-                  items: _groqLlmModels
-                      .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                  items: _openRouterModels
+                      .map((m) => DropdownMenuItem(value: m, child: Text(m, overflow: TextOverflow.ellipsis)))
                       .toList(),
-                  onChanged: (v) => setState(() => _selectedLlmModel = v!),
+                  onChanged: (v) => setState(() => _selectedOpenRouterModel = v!),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          _buildSectionTitle('NVIDIA (Fallback LLM)'),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade400, width: 1),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('NVIDIA API Key', style: TextStyle(fontSize: 14, color: Colors.grey)),
+                const SizedBox(height: 4),
+                TextField(
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    hintText: 'Paste your NVIDIA API key here',
+                    border: InputBorder.none,
+                    isDense: true,
+                  ),
+                  onChanged: (value) => _nvidiaApiKey = value,
+                  controller: TextEditingController(text: _nvidiaApiKey)
+                    ..selection = TextSelection.collapsed(offset: _nvidiaApiKey.length),
+                ),
+                const Divider(height: 16),
+                DropdownButtonFormField<String>(
+                  value: _nvidiaModels.contains(_selectedNvidiaModel) ? _selectedNvidiaModel : _nvidiaModels.first,
+                  decoration: const InputDecoration(
+                    labelText: '🧠 NVIDIA LLM Model',
+                    border: InputBorder.none,
+                    isDense: true,
+                  ),
+                  items: _nvidiaModels
+                      .map((m) => DropdownMenuItem(value: m, child: Text(m, overflow: TextOverflow.ellipsis)))
+                      .toList(),
+                  onChanged: (v) => setState(() => _selectedNvidiaModel = v!),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          _buildSectionTitle('Primary API Priority'),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade400, width: 1),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Select which LLM provider to try first. On rate-limit, the other is used automatically.',
+                  style: TextStyle(fontSize: 13, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildApiOption('OpenRouter', Icons.rocket_launch, _primaryApi == 'openrouter', () {
+                        setState(() => _primaryApi = 'openrouter');
+                      }),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildApiOption('NVIDIA', Icons.memory, _primaryApi == 'nvidia', () {
+                        setState(() => _primaryApi = 'nvidia');
+                      }),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _primaryApi == 'openrouter'
+                      ? 'Flow: OpenRouter → (429) → NVIDIA'
+                      : 'Flow: NVIDIA → (429) → OpenRouter',
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
                 ),
               ],
             ),
@@ -1957,12 +2161,40 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
   }
+
+  Widget _buildApiOption(String title, IconData icon, bool isSelected, VoidCallback onTap) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: isSelected ? colorScheme.primary.withOpacity(0.1) : Colors.transparent,
+          border: Border.all(color: isSelected ? colorScheme.primary : Colors.grey),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: isSelected ? colorScheme.primary : Colors.grey),
+            const SizedBox(height: 6),
+            Text(title, style: TextStyle(
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              color: isSelected ? colorScheme.primary : Colors.grey,
+            )),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // --- Services ---
 
 class TranscriptionService {
   static const String _groqBaseUrl = 'https://api.groq.com/openai/v1';
+  static const String _openRouterBaseUrl = 'https://openrouter.ai/api/v1';
+  static const String _nvidiaBaseUrl = 'https://integrate.api.nvidia.com/v1';
 
   static const String _polishSystemPrompt =
       'You are a professional secretary and expert note-taker. '
@@ -1977,12 +2209,11 @@ class TranscriptionService {
       '\nOutput ONLY the Markdown. Do not wrap in triple backticks. Do not add any preamble or explanation.';
 
 
-  /// Main entry point: 2 API calls — Whisper STT → Groq LLM Polish.
+  /// Main entry point: 2 API calls — Whisper STT → LLM Polish (with fallback).
   Future<Map<String, String>> processNote(String audioPath) async {
     final prefs = await SharedPreferences.getInstance();
     final apiKey = prefs.getString('groq_api_key') ?? '';
     final sttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
-    final llmModel = prefs.getString('groq_llm_model') ?? 'llama-3.3-70b-versatile';
 
     if (apiKey.isEmpty) {
       throw Exception('Groq API Key is not set. Please add it in Settings.');
@@ -1999,8 +2230,8 @@ class TranscriptionService {
       };
     }
 
-    // Stage 2: LLM Polish (API Call 2)
-    final polishedNote = await _callGroqLLM(rawTranscript, apiKey, llmModel);
+    // Stage 2: LLM Polish (API Call 2) with automatic fallback
+    final polishedNote = await _callLLMWithFallback(rawTranscript);
 
     return {
       'rawTranscript': rawTranscript,
@@ -2018,12 +2249,8 @@ class TranscriptionService {
     return _callWhisper(audioPath, apiKey, sttModel);
   }
 
-  /// Stage 2 (public): Polish transcript using Groq LLM.
+  /// Stage 2 (public): Polish transcript with auto-fallback between LLM providers.
   Future<Map<String, String>> polish(String rawTranscript) async {
-    final prefs = await SharedPreferences.getInstance();
-    final apiKey = prefs.getString('groq_api_key') ?? '';
-    final llmModel = prefs.getString('groq_llm_model') ?? 'llama-3.3-70b-versatile';
-    if (apiKey.isEmpty) throw Exception('Groq API Key is not set. Please add it in Settings.');
     if (rawTranscript.trim().length < 3) {
       return {
         'rawTranscript': 'No speech detected.',
@@ -2031,7 +2258,7 @@ class TranscriptionService {
         'polishedNote': 'No speech was detected in the recording. Please try again.',
       };
     }
-    final polishedNote = await _callGroqLLM(rawTranscript, apiKey, llmModel);
+    final polishedNote = await _callLLMWithFallback(rawTranscript);
     return {
       'rawTranscript': rawTranscript,
       'cleanedTranscript': rawTranscript,
@@ -2059,7 +2286,7 @@ class TranscriptionService {
     throw Exception('Groq Whisper error (${response.statusCode}): ${response.body}');
   }
 
-  Future<String> _callGroqLLM(String transcript, String apiKey, String llmModel) async {
+  Future<String> _callOpenRouterLLM(String transcript, String apiKey, String llmModel) async {
     final prefs = await SharedPreferences.getInstance();
     bool translate = prefs.getBool('enable_translation') ?? false;
     String targetedLanguage = prefs.getString('target_language') ?? 'English';
@@ -2067,21 +2294,20 @@ class TranscriptionService {
     String systemPrompt = "";
 
     if (translate == false) {
-      // normal prompt now which it is exists
-      // The prompt already says: "Remove filler words... and clean up jargon"
       systemPrompt = _polishSystemPrompt;
     } else {
-      // normal prompt + translate to {Targeted_Language} 
       systemPrompt = _polishSystemPrompt + '\n\nAlso, translate the entire cleaned and structured output into $targetedLanguage. Ensure the final note is written completely in $targetedLanguage.';
     }
 
-    final url = Uri.parse('$_groqBaseUrl/chat/completions');
+    final url = Uri.parse('$_openRouterBaseUrl/chat/completions');
     final response = await http
         .post(
           url,
           headers: {
             'Authorization': 'Bearer $apiKey',
             'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://github.com/ullas9525/Dictation_App',
+            'X-Title': 'Voice Notes App',
           },
           body: jsonEncode({
             'model': llmModel,
@@ -2106,14 +2332,128 @@ class TranscriptionService {
       }
       return content;
     }
-    if (response.statusCode == 401) throw Exception('Invalid Groq API Key. Please check Settings.');
-    if (response.statusCode == 429) throw Exception('QUOTA_EXHAUSTED: Groq LLM quota reached. Try switching Brain model.');
-    throw Exception('Groq LLM error (${response.statusCode}): ${response.body}');
+    if (response.statusCode == 401) throw Exception('Invalid OpenRouter API Key. Please check Settings.');
+    if (response.statusCode == 429) throw Exception('OpenRouter quota reached. Try switching model.');
+    throw Exception('OpenRouter LLM error (${response.statusCode}): ${response.body}');
   }
 
-  /// Re-polish raw transcript directly via Groq (for the ✨ Try Again button).
+  /// Re-polish raw transcript via OpenRouter (for the ✨ Try Again button).
   Future<String> rePolishDirect(String rawTranscript, String apiKey, String llmModel) async {
-    return _callGroqLLM(rawTranscript, apiKey, llmModel);
+    return _callOpenRouterLLM(rawTranscript, apiKey, llmModel);
+  }
+
+  /// Re-polish raw transcript via NVIDIA (fallback for ✨ Try Again).
+  Future<String> rePolishNVIDIA(String rawTranscript, String apiKey) async {
+    return _callNVIDIALLM(rawTranscript, apiKey);
+  }
+
+  Future<String> _callNVIDIALLM(String transcript, String apiKey) async {
+    return _callNVIDIALLMWithModel(transcript, apiKey, null);
+  }
+
+  Future<String> _callNVIDIALLMWithModel(String transcript, String apiKey, String? overrideModel) async {
+    final prefs = await SharedPreferences.getInstance();
+    bool translate = prefs.getBool('enable_translation') ?? false;
+    String targetedLanguage = prefs.getString('target_language') ?? 'English';
+
+    String systemPrompt = translate
+        ? _polishSystemPrompt + '\n\nAlso, translate the entire cleaned and structured output into $targetedLanguage. Ensure the final note is written completely in $targetedLanguage.'
+        : _polishSystemPrompt;
+
+    final String nvidiaModel = overrideModel ?? prefs.getString('nvidia_model') ?? 'deepseek-ai/deepseek-v4-flash';
+    final url = Uri.parse('$_nvidiaBaseUrl/chat/completions');
+    final response = await http
+        .post(
+          url,
+          headers: {
+            'Authorization': 'Bearer $apiKey',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'model': nvidiaModel,
+            'messages': [
+              {'role': 'system', 'content': systemPrompt},
+              {'role': 'user', 'content': 'PROCESS THIS TRANSCRIPT:\n\n$transcript'},
+            ],
+            'temperature': 0.3,
+            'max_tokens': 4096,
+          }),
+        )
+        .timeout(const Duration(seconds: 60));
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      String content = data['choices'][0]['message']['content'].toString().trim();
+      if (content.startsWith('```')) {
+        final lines = content.split('\n');
+        final stripped = lines.skip(1).toList();
+        if (stripped.isNotEmpty && stripped.last.startsWith('```')) stripped.removeLast();
+        content = stripped.join('\n').trim();
+      }
+      return content;
+    }
+    if (response.statusCode == 401) throw Exception('Invalid NVIDIA API Key. Please check Settings.');
+    if (response.statusCode == 429) throw Exception('NVIDIA API rate limit reached.');
+    throw Exception('NVIDIA LLM error (${response.statusCode}): ${response.body}');
+  }
+
+  /// Tries the primary LLM provider; on rate-limit (429) silently falls back to the secondary.
+  Future<String> _callLLMWithFallback(String transcript) async {
+    final prefs = await SharedPreferences.getInstance();
+    final primary = prefs.getString('primary_api') ?? 'openrouter';
+    final openRouterKey = prefs.getString('openrouter_api_key') ?? '';
+    final nvidiaKey = prefs.getString('nvidia_api_key') ?? '';
+    final openRouterModel = prefs.getString('openrouter_model') ?? 'meta-llama/llama-3.2-3b-instruct:free';
+
+    bool triedOpenRouter = false;
+    bool triedNvidia = false;
+
+    if (primary == 'openrouter') {
+      triedOpenRouter = true;
+      if (openRouterKey.isNotEmpty) {
+        try {
+          return await _callOpenRouterLLM(transcript, openRouterKey, openRouterModel);
+        } catch (e) {
+          final msg = e.toString();
+          if (msg.contains('429') || msg.contains('QUOTA_EXHAUSTED') || msg.contains('rate limit') || msg.contains('quota')) {
+            // rate-limited — fall through to secondary
+          } else {
+            rethrow;
+          }
+        }
+      }
+      triedNvidia = true;
+      if (nvidiaKey.isNotEmpty) {
+        return await _callNVIDIALLM(transcript, nvidiaKey);
+      }
+    } else {
+      triedNvidia = true;
+      if (nvidiaKey.isNotEmpty) {
+        try {
+          return await _callNVIDIALLM(transcript, nvidiaKey);
+        } catch (e) {
+          final msg = e.toString();
+          if (msg.contains('429') || msg.contains('rate limit') || msg.contains('quota')) {
+            // rate-limited — fall through to secondary
+          } else {
+            rethrow;
+          }
+        }
+      }
+      triedOpenRouter = true;
+      if (openRouterKey.isNotEmpty) {
+        return await _callOpenRouterLLM(transcript, openRouterKey, openRouterModel);
+      }
+    }
+
+    // Build a helpful error message
+    final missing = [];
+    if (triedOpenRouter && openRouterKey.isEmpty) missing.add('OpenRouter');
+    if (triedNvidia && nvidiaKey.isEmpty) missing.add('NVIDIA');
+    if (missing.isNotEmpty) {
+      throw Exception('${missing.join(" and ")} API Key${missing.length > 1 ? "s are" : " is"} not set. Please add it in Settings.');
+    }
+    throw Exception('Both LLM providers are rate-limited. Please try again later or switch models in Settings.');
   }
 }
 
