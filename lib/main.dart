@@ -1535,17 +1535,26 @@ class _TranscribePageState extends State<TranscribePage> {
       // Stage 1: Whisper STT — shown as "Uploading"
       final rawTranscript = await service.transcribe(widget.audioPath);
 
-      // Stage 2: LLM Polish — shown as "Processing"
+      // Stage 2: LLM Clean — shown as "Processing"
       if (!mounted) return;
       setState(() => _currentStep = ProcessingStep.processing);
-      final results = await service.polish(rawTranscript);
+      final cleanedTranscript = await service.clean(rawTranscript);
 
-      // Stage 3: Done — shown as "Downloading" briefly
+      // Stage 3: LLM Polish — shown as "Processing" (continues)
+      final polishedNote = await service.polish(rawTranscript);
+
+      // Stage 4: Done — shown as "Downloading" briefly
       if (!mounted) return;
       setState(() => _currentStep = ProcessingStep.completed);
       await Future.delayed(const Duration(milliseconds: 600));
 
-      if (mounted) Navigator.of(context).pop(results);
+      if (mounted) {
+        Navigator.of(context).pop(<String, String>{
+          'rawTranscript': rawTranscript,
+          'cleanedTranscript': cleanedTranscript,
+          'polishedNote': polishedNote,
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -1948,7 +1957,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const SizedBox(height: 24),
-          _buildSectionTitle('OpenRouter (LLM Brain)'),
+          _buildSectionTitle(_primaryApi == 'openrouter' ? 'OpenRouter (LLM Brain)' : 'OpenRouter (LLM Fallback)'),
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1974,8 +1983,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 const Divider(height: 16),
                 DropdownButtonFormField<String>(
                   value: _openRouterModels.contains(_selectedOpenRouterModel) ? _selectedOpenRouterModel : _openRouterModels.first,
-                  decoration: const InputDecoration(
-                    labelText: '🧠 Brain (LLM) Model',
+                  decoration: InputDecoration(
+                    labelText: _primaryApi == 'openrouter' ? '🧠 Brain (LLM) Model' : '🧠 Fallback (LLM) Model',
                     border: InputBorder.none,
                     isDense: true,
                   ),
@@ -1988,7 +1997,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const SizedBox(height: 24),
-          _buildSectionTitle('NVIDIA (Fallback LLM)'),
+          _buildSectionTitle(_primaryApi == 'nvidia' ? 'NVIDIA (LLM Brain)' : 'NVIDIA (LLM Fallback)'),
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -2015,8 +2024,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 const Divider(height: 16),
                 DropdownButtonFormField<String>(
                   value: _nvidiaModels.contains(_selectedNvidiaModel) ? _selectedNvidiaModel : _nvidiaModels.first,
-                  decoration: const InputDecoration(
-                    labelText: '🧠 NVIDIA LLM Model',
+                  decoration: InputDecoration(
+                    labelText: _primaryApi == 'nvidia' ? '🧠 Brain (LLM) Model' : '🧠 Fallback (LLM) Model',
                     border: InputBorder.none,
                     isDense: true,
                   ),
@@ -2208,8 +2217,14 @@ class TranscriptionService {
       '4. Bold (**) all key terms, names, decisions, and important concepts.\n'
       '\nOutput ONLY the Markdown. Do not wrap in triple backticks. Do not add any preamble or explanation.';
 
+  static const String _cleanSystemPrompt =
+      'You are a professional editor. Clean up a raw voice transcript. '
+      'Remove all filler words (um, uh, like, you know, sort of, kind of, actually, basically, literally). '
+      'Fix grammar and sentence structure. Correct technical or phonetic errors. '
+      'Keep the content and meaning exactly the same \u2014 do not add, remove, or rephrase substantive information. '
+      'Do NOT use Markdown formatting. Output plain text only, with proper capitalization and punctuation.';
 
-  /// Main entry point: 2 API calls — Whisper STT → LLM Polish (with fallback).
+  /// Main entry point: 3 API calls — Whisper STT → LLM Clean → LLM Polish (both with fallback).
   Future<Map<String, String>> processNote(String audioPath) async {
     final prefs = await SharedPreferences.getInstance();
     final apiKey = prefs.getString('groq_api_key') ?? '';
@@ -2230,12 +2245,15 @@ class TranscriptionService {
       };
     }
 
-    // Stage 2: LLM Polish (API Call 2) with automatic fallback
+    // Stage 2: LLM Clean (API Call 2) with automatic fallback
+    final cleanedTranscript = await _callLLMWithFallback(rawTranscript, systemPrompt: _cleanSystemPrompt);
+
+    // Stage 3: LLM Polish (API Call 3) with automatic fallback
     final polishedNote = await _callLLMWithFallback(rawTranscript);
 
     return {
       'rawTranscript': rawTranscript,
-      'cleanedTranscript': rawTranscript, // same as raw — Whisper output is already clean
+      'cleanedTranscript': cleanedTranscript,
       'polishedNote': polishedNote,
     };
   }
@@ -2249,21 +2267,16 @@ class TranscriptionService {
     return _callWhisper(audioPath, apiKey, sttModel);
   }
 
-  /// Stage 2 (public): Polish transcript with auto-fallback between LLM providers.
-  Future<Map<String, String>> polish(String rawTranscript) async {
-    if (rawTranscript.trim().length < 3) {
-      return {
-        'rawTranscript': 'No speech detected.',
-        'cleanedTranscript': 'No speech detected.',
-        'polishedNote': 'No speech was detected in the recording. Please try again.',
-      };
-    }
-    final polishedNote = await _callLLMWithFallback(rawTranscript);
-    return {
-      'rawTranscript': rawTranscript,
-      'cleanedTranscript': rawTranscript,
-      'polishedNote': polishedNote,
-    };
+  /// Stage 2 (public): Clean transcript via LLM — remove fillers, fix grammar.
+  Future<String> clean(String rawTranscript) async {
+    if (rawTranscript.trim().length < 3) return rawTranscript;
+    return _callLLMWithFallback(rawTranscript, systemPrompt: _cleanSystemPrompt);
+  }
+
+  /// Stage 3 (public): Polish transcript with auto-fallback between LLM providers.
+  Future<String> polish(String rawTranscript) async {
+    if (rawTranscript.trim().length < 3) return 'No speech was detected in the recording. Please try again.';
+    return _callLLMWithFallback(rawTranscript);
   }
 
   Future<String> _callWhisper(String audioPath, String apiKey, String sttModel) async {
@@ -2286,17 +2299,14 @@ class TranscriptionService {
     throw Exception('Groq Whisper error (${response.statusCode}): ${response.body}');
   }
 
-  Future<String> _callOpenRouterLLM(String transcript, String apiKey, String llmModel) async {
-    final prefs = await SharedPreferences.getInstance();
-    bool translate = prefs.getBool('enable_translation') ?? false;
-    String targetedLanguage = prefs.getString('target_language') ?? 'English';
-
-    String systemPrompt = "";
-
-    if (translate == false) {
-      systemPrompt = _polishSystemPrompt;
-    } else {
-      systemPrompt = _polishSystemPrompt + '\n\nAlso, translate the entire cleaned and structured output into $targetedLanguage. Ensure the final note is written completely in $targetedLanguage.';
+  Future<String> _callOpenRouterLLM(String transcript, String apiKey, String llmModel, {String? systemPrompt}) async {
+    if (systemPrompt == null) {
+      final prefs = await SharedPreferences.getInstance();
+      bool translate = prefs.getBool('enable_translation') ?? false;
+      String targetedLanguage = prefs.getString('target_language') ?? 'English';
+      systemPrompt = translate
+          ? _polishSystemPrompt + '\n\nAlso, translate the entire cleaned and structured output into $targetedLanguage. Ensure the final note is written completely in $targetedLanguage.'
+          : _polishSystemPrompt;
     }
 
     final url = Uri.parse('$_openRouterBaseUrl/chat/completions');
@@ -2347,18 +2357,19 @@ class TranscriptionService {
     return _callNVIDIALLM(rawTranscript, apiKey);
   }
 
-  Future<String> _callNVIDIALLM(String transcript, String apiKey) async {
-    return _callNVIDIALLMWithModel(transcript, apiKey, null);
+  Future<String> _callNVIDIALLM(String transcript, String apiKey, {String? systemPrompt}) async {
+    return _callNVIDIALLMWithModel(transcript, apiKey, null, systemPrompt: systemPrompt);
   }
 
-  Future<String> _callNVIDIALLMWithModel(String transcript, String apiKey, String? overrideModel) async {
+  Future<String> _callNVIDIALLMWithModel(String transcript, String apiKey, String? overrideModel, {String? systemPrompt}) async {
     final prefs = await SharedPreferences.getInstance();
-    bool translate = prefs.getBool('enable_translation') ?? false;
-    String targetedLanguage = prefs.getString('target_language') ?? 'English';
-
-    String systemPrompt = translate
-        ? _polishSystemPrompt + '\n\nAlso, translate the entire cleaned and structured output into $targetedLanguage. Ensure the final note is written completely in $targetedLanguage.'
-        : _polishSystemPrompt;
+    if (systemPrompt == null) {
+      bool translate = prefs.getBool('enable_translation') ?? false;
+      String targetedLanguage = prefs.getString('target_language') ?? 'English';
+      systemPrompt = translate
+          ? _polishSystemPrompt + '\n\nAlso, translate the entire cleaned and structured output into $targetedLanguage. Ensure the final note is written completely in $targetedLanguage.'
+          : _polishSystemPrompt;
+    }
 
     final String nvidiaModel = overrideModel ?? prefs.getString('nvidia_model') ?? 'deepseek-ai/deepseek-v4-flash';
     final url = Uri.parse('$_nvidiaBaseUrl/chat/completions');
@@ -2398,7 +2409,7 @@ class TranscriptionService {
   }
 
   /// Tries the primary LLM provider; on rate-limit (429) silently falls back to the secondary.
-  Future<String> _callLLMWithFallback(String transcript) async {
+  Future<String> _callLLMWithFallback(String transcript, {String? systemPrompt}) async {
     final prefs = await SharedPreferences.getInstance();
     final primary = prefs.getString('primary_api') ?? 'openrouter';
     final openRouterKey = prefs.getString('openrouter_api_key') ?? '';
@@ -2412,7 +2423,7 @@ class TranscriptionService {
       triedOpenRouter = true;
       if (openRouterKey.isNotEmpty) {
         try {
-          return await _callOpenRouterLLM(transcript, openRouterKey, openRouterModel);
+          return await _callOpenRouterLLM(transcript, openRouterKey, openRouterModel, systemPrompt: systemPrompt);
         } catch (e) {
           final msg = e.toString();
           if (msg.contains('429') || msg.contains('QUOTA_EXHAUSTED') || msg.contains('rate limit') || msg.contains('quota')) {
@@ -2424,13 +2435,13 @@ class TranscriptionService {
       }
       triedNvidia = true;
       if (nvidiaKey.isNotEmpty) {
-        return await _callNVIDIALLM(transcript, nvidiaKey);
+        return await _callNVIDIALLM(transcript, nvidiaKey, systemPrompt: systemPrompt);
       }
     } else {
       triedNvidia = true;
       if (nvidiaKey.isNotEmpty) {
         try {
-          return await _callNVIDIALLM(transcript, nvidiaKey);
+          return await _callNVIDIALLM(transcript, nvidiaKey, systemPrompt: systemPrompt);
         } catch (e) {
           final msg = e.toString();
           if (msg.contains('429') || msg.contains('rate limit') || msg.contains('quota')) {
@@ -2442,7 +2453,7 @@ class TranscriptionService {
       }
       triedOpenRouter = true;
       if (openRouterKey.isNotEmpty) {
-        return await _callOpenRouterLLM(transcript, openRouterKey, openRouterModel);
+        return await _callOpenRouterLLM(transcript, openRouterKey, openRouterModel, systemPrompt: systemPrompt);
       }
     }
 

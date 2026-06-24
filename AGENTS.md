@@ -11,9 +11,9 @@ flutter test             # 1 test, currently outdated
 
 ## Architecture (serverless)
 
-- **All app code** in `lib/main.dart` (~2200 lines, single file)
-- **Zero backend**: calls Groq (STT) + OpenRouter (LLM) directly from Flutter via `http` package
-- **2 API calls per note**: Groq Whisper STT → OpenRouter LLM polish (no separate clean step)
+- **All app code** in `lib/main.dart` (~2600 lines, single file)
+- **Zero backend**: calls Groq (STT) + OpenRouter/NVIDIA (LLM) directly from Flutter via `http` package
+- **3 API calls per note**: Groq Whisper STT → LLM Clean (remove fillers, fix grammar) → LLM Polish (structured markdown, with translation)
 - **State management**: Provider (`ThemeProvider`, `NoteProvider`, `RecordingProvider`)
 - **Persistence**: `shared_preferences` for API keys, STT/LLM model choice, translation toggle, theme
 - **Audio**: recorded as AAC/M4A (`record` package), sampled at 16kHz mono
@@ -29,7 +29,7 @@ flutter test             # 1 test, currently outdated
 
 | Class | File:line | Role |
 |-------|-----------|------|
-| `TranscriptionService` | `main.dart:2124` | 2 API calls (`_callWhisper`, `_callOpenRouterLLM`, `_callNVIDIALLM`) + `_callLLMWithFallback()` |
+| `TranscriptionService` | `main.dart:2124` | 3 API calls (`_callWhisper`, `_callOpenRouterLLM`, `_callNVIDIALLM`) + `_callLLMWithFallback()` |
 | `RecordingProvider` | `main.dart:123` | Audio recording lifecycle |
 | `NoteProvider` | `main.dart:56` | Raw/cleaned/polished transcript + translation state |
 | `TranscribePage` | `main.dart:1450` | Processing screen with stepper |
@@ -44,7 +44,7 @@ flutter test             # 1 test, currently outdated
 ## Fallback flow
 - `_callLLMWithFallback()` reads `primary_api` from SharedPreferences (`'openrouter'` or `'nvidia'`)
 - Tries primary provider first; on 429/rate-limit, silently tries the secondary
-- Used by `processNote()` and `polish()` (the main transcription flow)
+- Used by `processNote()`, `clean()`, and `polish()` (the main transcription flow)
 - `✨` Re-polish also falls back to NVIDIA if the selected OpenRouter model rate-limits
 
 ## Gotchas
@@ -54,7 +54,7 @@ flutter test             # 1 test, currently outdated
 - **Gradle home** redirected to project-local `.gradle_home` (not global cache)
 - **`.gitignore`** excludes AI tracking files (`changes.md`, `score.md`, `problemstatement.md`, `Muddu_Dictation_AI_Technical_Documentation.md`)
 - **Existing instructions**: `.github/copilot-instructions.md` (graphify-first lookup), `.agents/rules/graphify.md` (same), `.agents/workflows/` (explain/graphify/understand)
-- **`cleanedTranscript == rawTranscript`** — Whisper output is used directly (no separate clean LLM call)
+- **`cleanedTranscript`** — now a separate LLM clean call (no longer `== rawTranscript`)
 - **Three separate API keys possible**: Groq (STT) + OpenRouter + NVIDIA (LLM brain with fallback)
 
 ## Translation feature
