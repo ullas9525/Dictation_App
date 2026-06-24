@@ -61,3 +61,9 @@ flutter test             # 1 test, currently outdated
 - Toggle + language picker in Settings persist to `SharedPreferences`
 - A single prompt extension appends translation instruction to the OpenRouter LLM call (no separate API call)
 - Supported languages: English, Hindi, Kannada, Telugu, Tamil, Malayalam, Marathi, Bengali
+
+## Auto-Copy to Clipboard
+- Settings toggle `auto_copy_enabled` + dropdown `auto_copy_target` (`'clean'`/`'polished'`)
+- After processing completes, `_autoCopyResult()` in `_HomePageState` reads prefs and copies the selected transcript to clipboard via `Clipboard.setData`
+- Shows a snackbar confirming the copy
+- Persisted in `SharedPreferences`

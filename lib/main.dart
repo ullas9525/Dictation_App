@@ -480,9 +480,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         );
         if (transcripts != null) {
           noteProvider.updateTranscripts(transcripts);
+          _autoCopyResult(noteProvider);
           widget.onNoteProcessed();
         }
       }
+    }
+  }
+
+  Future<void> _autoCopyResult(NoteProvider noteProvider) async {
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool('auto_copy_enabled') ?? false;
+    if (!enabled) return;
+    final target = prefs.getString('auto_copy_target') ?? 'polished';
+    final text = target == 'clean' ? noteProvider.cleanedTranscript : noteProvider.polishedTranscript;
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${target == 'clean' ? 'Clean' : 'Polish'} note copied to clipboard 📋')),
+      );
     }
   }
 
@@ -586,6 +601,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       );
       if (transcripts != null) {
         noteProvider.updateTranscripts(transcripts);
+        _autoCopyResult(noteProvider);
         widget.onNoteProcessed();
       }
     }
@@ -1826,6 +1842,10 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _enableTranslation = false;
   String _selectedTargetLanguage = 'English';
 
+  // --- AUTO-COPY VARIABLES ---
+  bool _autoCopyEnabled = false;
+  String _autoCopyTarget = 'polished'; // 'clean' or 'polished'
+
   final List<String> _groqSttModels = [
     'whisper-large-v3-turbo',
     'whisper-large-v3',
@@ -1861,6 +1881,8 @@ class _SettingsPageState extends State<SettingsPage> {
         _selectedOpenRouterModel = prefs.getString('openrouter_model') ?? 'meta-llama/llama-3.2-3b-instruct:free';
         _enableTranslation = prefs.getBool('enable_translation') ?? false;
         _selectedTargetLanguage = prefs.getString('target_language') ?? 'English';
+        _autoCopyEnabled = prefs.getBool('auto_copy_enabled') ?? false;
+        _autoCopyTarget = prefs.getString('auto_copy_target') ?? 'polished';
         
         if (!_groqSttModels.contains(_selectedSttModel)) _selectedSttModel = _groqSttModels.first;
         if (!_openRouterModels.contains(_selectedOpenRouterModel)) _selectedOpenRouterModel = _openRouterModels.first;
@@ -1881,6 +1903,8 @@ class _SettingsPageState extends State<SettingsPage> {
     await prefs.setString('openrouter_model', _selectedOpenRouterModel);
     await prefs.setBool('enable_translation', _enableTranslation);
     await prefs.setString('target_language', _selectedTargetLanguage);
+    await prefs.setBool('auto_copy_enabled', _autoCopyEnabled);
+    await prefs.setString('auto_copy_target', _autoCopyTarget);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Settings saved! ✅')),
@@ -2133,7 +2157,39 @@ class _SettingsPageState extends State<SettingsPage> {
                 () => themeProvider.setThemeMode(ThemeMode.dark),
               ),
             ],
-          )
+          ),
+          const SizedBox(height: 24),
+          _buildSectionTitle('Clipboard'),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade400, width: 1),
+            ),
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('Auto-Copy to Clipboard'),
+                  subtitle: const Text('Copy result after processing'),
+                  value: _autoCopyEnabled,
+                  onChanged: (bool value) {
+                    setState(() => _autoCopyEnabled = value);
+                  },
+                ),
+                if (_autoCopyEnabled)
+                  DropdownButtonFormField<String>(
+                    value: _autoCopyTarget,
+                    decoration: const InputDecoration(labelText: 'Copy Target'),
+                    items: const [
+                      DropdownMenuItem(value: 'clean', child: Text('Clean Note')),
+                      DropdownMenuItem(value: 'polished', child: Text('Polish Note')),
+                    ],
+                    onChanged: (v) => setState(() => _autoCopyTarget = v!),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );
