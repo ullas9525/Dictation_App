@@ -379,6 +379,10 @@ class LlmProvider {
     }
   }
 
+  /// The two main providers (OpenRouter and Gemini) can be edited, but they
+  /// cannot be removed. Only providers connected through "+" may be deleted.
+  bool get isProtected => id == 'openrouter' || id == 'gemini';
+
   Map<String, dynamic> toJson() => <String, dynamic>{
         'id': id,
         'name': name,
@@ -2476,26 +2480,13 @@ class _SettingsPageState extends State<SettingsPage> {
               color: isConnected ? Colors.green.shade700 : Colors.orange.shade800,
             ),
           ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                icon: Icon(
-                  isPrimary ? Icons.star : Icons.star_border,
-                  color: isPrimary ? Colors.amber : Colors.grey,
-                  size: 20,
-                ),
-                tooltip: isPrimary ? 'Primary brain' : 'Set as primary brain',
-                onPressed: isPrimary ? null : () => _setPrimaryProvider(provider),
-              ),
-              IconButton(
-                icon: const Icon(Icons.add, size: 20),
-                tooltip: 'Connect a new provider',
-                onPressed: () => _showProviderSheet(),
-              ),
-              Icon(isConnected ? Icons.chevron_right : Icons.key,
-                  color: Colors.grey),
-            ],
+          trailing: IconButton(
+            icon: Icon(
+              isPrimary ? Icons.star : Icons.star_border,
+              color: isPrimary ? Colors.amber : Colors.grey,
+            ),
+            tooltip: isPrimary ? 'Primary brain' : 'Set as primary brain',
+            onPressed: isPrimary ? null : () => _setPrimaryProvider(provider),
           ),
         ),
       ),
@@ -2552,6 +2543,16 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _removeProvider(LlmProvider provider) async {
+    if (provider.isProtected) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(
+                  '${provider.name} is a main provider and cannot be removed.')),
+        );
+      }
+      return;
+    }
     final bool confirmed = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
@@ -2892,19 +2893,21 @@ class _SettingsPageState extends State<SettingsPage> {
                               label: const Text('Set as primary'),
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () async {
-                                Navigator.pop(ctx);
-                                await _removeProvider(existing);
-                              },
-                              icon: const Icon(Icons.delete_outline,
-                                  size: 18, color: Colors.red),
-                              label: const Text('Remove',
-                                  style: TextStyle(color: Colors.red)),
+                          if (!existing.isProtected) ...[
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () async {
+                                  Navigator.pop(ctx);
+                                  await _removeProvider(existing);
+                                },
+                                icon: const Icon(Icons.delete_outline,
+                                    size: 18, color: Colors.red),
+                                label: const Text('Remove',
+                                    style: TextStyle(color: Colors.red)),
+                              ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
                     ],

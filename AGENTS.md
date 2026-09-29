@@ -33,7 +33,9 @@ hard-coded fallback — it can be re-added (like anything else) as a custom prov
 - `ProviderRegistry` (`main.dart:415`) — `load`, `save`, `resolvePrimaryId`, `orderedForFallback`, `flowLabel` + `presets` (chips in the connect sheet).
 - SharedPreferences: `llm_providers` (JSON list, **API keys included**) and `primary_provider_id`.
 - First launch after the upgrade migrates `openrouter_api_key` / `openrouter_model` (and a legacy `gemini_api_key`) into the registry, then removes `nvidia_api_key`, `nvidia_model`, `primary_api`.
-- **"+" button** (next to the section title and on every provider row) opens `_showProviderSheet` → preset chip or free-form name/base URL/model(s) → `_upsertProvider` → persisted → instantly used for polishing and as a fallback. No code change needed for a new provider.
+- **"+" button** (next to the section title only) opens `_showProviderSheet` → preset chip or free-form name/base URL/model(s) → `_upsertProvider` → persisted → instantly used for polishing and as a fallback. No code change needed for a new provider.
+- **Provider rows have no "+" buttons and no ">" chevron.** Each row has a star for making that provider primary; tapping the row opens the flow. The standalone "Connect another provider" entry is the only add path.
+- **Main providers cannot be deleted.** `LlmProvider.isProtected` covers OpenRouter and Gemini; `_removeProvider` rejects them with a message, and the provider settings sheet hides the Remove action for them. Only "+"-connected providers expose Remove.
 - **Key-remembering flow**: tapping a provider row calls `_openProvider` — no stored key → `_connectProvider` → `_askForApiKey` dialog (asked only this once, saved to the registry) → then the provider settings sheet; stored key → settings open directly. Keys are managed from the sheet (masked `••••xxxx` + "Update key" / "Remove key"); a removed key makes the dialog appear again on the next tap.
 - The ✨ Try-Again sheet and the `TranscribePage` error screen both build their provider/model pickers from the registry (`_loadRetryOptions`), and the retry applies the selected model to its provider before re-running.
 
