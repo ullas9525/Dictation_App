@@ -123,4 +123,76 @@ void main() {
     final providers = await ProviderRegistry.load(prefs);
     expect(providers.map((LlmProvider p) => p.name), ['OpenRouter', 'Gemini']);
   });
+
+  group('OpenRouter free model list (Retry free model list)', () {
+    const String body = '''
+{
+  "data": [
+    {"id": "paid/model-a", "pricing": {"prompt": "0.000002", "completion": "0.00001"}},
+    {"id": "free/model-c", "pricing": {"prompt": "0", "completion": "0"}},
+    {"id": "free/model-b", "pricing": {"prompt": "0.0", "completion": "0.00"}},
+    {"id": "free/model-c", "pricing": {"prompt": "0", "completion": "0"}},
+    {"id": "free/model-d", "pricing": {"prompt": "0", "completion": "0.00001"}},
+    {"id": "free/model-e", "pricing": {"prompt": "0", "completion": "0", "web_search": "0.01"}},
+    {"id": "free/model-f", "pricing": {}},
+    {"pricing": {"prompt": "0", "completion": "0"}},
+    "not-an-object",
+    {"id": "free/model-g", "pricing": {"prompt": 0, "completion": 0}}
+  ]
+}
+''';
+
+    test('keeps only models whose prompt AND completion prices are zero',
+        () {
+      final List<String> ids =
+          ProviderRegistry.freeOpenRouterModelIdsFromJson(body);
+
+      // Paid model-d, model-f (missing prices), the malformed entries and the
+      // model without an id must all be dropped.
+      expect(ids, <String>[
+        'free/model-b',
+        'free/model-c',
+        'free/model-e',
+        'free/model-g',
+      ]);
+      expect(ids, isNot(contains('paid/model-a')));
+      expect(ids, isNot(contains('free/model-d')));
+      expect(ids, isNot(contains('free/model-f')));
+      expect(ids.toSet().length, ids.length, reason: 'no duplicates');
+    });
+
+    test('the list is sorted so the dropdown stays stable', () {
+      final List<String> ids =
+          ProviderRegistry.freeOpenRouterModelIdsFromJson(body);
+      final List<String> sorted = [...ids]..sort();
+      expect(ids, sorted);
+    });
+
+    test('malformed payloads return an empty list instead of throwing', () {
+      expect(ProviderRegistry.freeOpenRouterModelIdsFromJson('not json'),
+          isEmpty);
+      expect(ProviderRegistry.freeOpenRouterModelIdsFromJson('{"data": 5}'),
+          isEmpty);
+      expect(ProviderRegistry.freeOpenRouterModelIdsFromJson('[]'), isEmpty);
+      expect(ProviderRegistry.freeOpenRouterModelIdsFromJson('null'), isEmpty);
+      expect(ProviderRegistry.freeOpenRouterModelIds('{"data": {}}'), isEmpty);
+      expect(ProviderRegistry.freeOpenRouterModelIds(null), isEmpty);
+    });
+  });
+
+  test('provider failure lines carry provider, model and truncated detail', () {
+    final String line = TranscriptionService.providerFailureLine(
+      'OpenRouter',
+      'some/retired-model:free',
+      Exception('x' * 400),
+    );
+
+    expect(line, startsWith('OpenRouter (some/retired-model:free): '));
+    expect(line.length, lessThan(320), reason: 'detail is truncated');
+    expect(
+      TranscriptionService.providerFailureLine(
+          'Gemini', 'gemini-2.5-flash', Exception('quota exceeded')),
+      'Gemini (gemini-2.5-flash): quota exceeded',
+    );
+  });
 }

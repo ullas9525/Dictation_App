@@ -58,9 +58,21 @@ hard-coded fallback — it can be re-added (like anything else) as a custom prov
 
 ## Fallback flow
 - `_callLLMWithFallback()` loads the registry, puts the primary (`primary_provider_id`) first, then every other connected provider in the order it was added
-- Providers without a key are skipped; on 429/quota (`_isRateLimited`) it moves to the next provider; any other error is rethrown
+- Both LLM loops (`_callLLMWithFallback` and `rePolishWithFallback`) share `_runProviderChain`, which **always moves to the next provider on any failure** (bad key, retired/paid model, quota, 4xx/5xx, timeout, network). The user only sees an error when *every* connected provider failed, and the message lists each provider's own failure (`providerFailureLine`)
+- Providers without a key are skipped before the loop; a local "no provider configured" error is thrown before any attempt
 - Used by `processNote()`, `clean()`, and `polish()` (the main transcription flow)
 - `✨` Re-polish uses `rePolishWithFallback(providerId:, model:)` — it prefers the provider + model chosen in the sheet, then falls back through the remaining providers
+
+## Retry semantics (TranscribePage)
+- `_rawTranscript` / `_cleanedTranscript` cache each stage that already succeeded
+- A retry **never re-sends audio to Groq** once transcription succeeded — only the failed LLM stage runs again, against the selected provider/model
+- The error screen states which case applies ("audio already transcribed — Retry skips Groq" vs "Retry transcription") and the button label follows
+
+## Free OpenRouter models (Settings)
+- "Retry free model list" (Settings → LLM Brain Providers, shown when OpenRouter exists) calls `GET openrouter.ai/api/v1/models`
+- `ProviderRegistry.freeOpenRouterModelIds*` keeps only models whose `pricing.prompt` **and** `pricing.completion` are zero — paid models disappear from every dropdown
+- The refreshed list replaces `LlmProvider.models`; the selected model is preserved when still free, otherwise the first free model is selected
+- `openrouter_free_models_refreshed_at_ms` stores the last refresh time (shown under the button)
 
 ## Gotchas
 

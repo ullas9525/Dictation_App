@@ -479,6 +479,51 @@ class ProviderRegistry {
     ProviderPreset('Custom', '', <String>[]),
   ];
 
+  static const String openRouterModelsUrl =
+      'https://openrouter.ai/api/v1/models';
+
+  /// Extracts the IDs of currently free OpenRouter chat models from a decoded
+  /// `/models` payload. A model counts as free only when both its prompt and
+  /// completion prices are zero. Returned IDs are sorted and deduplicated.
+  static List<String> freeOpenRouterModelIds(dynamic decoded) {
+    if (decoded is! Map) return <String>[];
+    final dynamic rawData = decoded['data'];
+    if (rawData is! List) return <String>[];
+
+    final Set<String> ids = <String>{};
+    for (final dynamic entry in rawData) {
+      if (entry is! Map) continue;
+      final String id = (entry['id'] ?? '').toString().trim();
+      final dynamic pricing = entry['pricing'];
+      if (id.isEmpty || pricing is! Map) continue;
+      if (!_isZeroPrice(pricing['prompt'])) continue;
+      if (!_isZeroPrice(pricing['completion'])) continue;
+      ids.add(id);
+    }
+
+    final List<String> sorted = ids.toList()..sort();
+    return sorted;
+  }
+
+  /// Parses an OpenRouter `/models` response body into sorted free model IDs.
+  /// Malformed payloads return an empty list so callers can show an error.
+  static List<String> freeOpenRouterModelIdsFromJson(String body) {
+    try {
+      return freeOpenRouterModelIds(jsonDecode(body));
+    } catch (_) {
+      return <String>[];
+    }
+  }
+
+  static bool _isZeroPrice(dynamic value) {
+    if (value == null) return false;
+    if (value is num) return value == 0;
+    final String text = value.toString().trim().toLowerCase();
+    if (text.isEmpty) return false;
+    final double? parsed = double.tryParse(text);
+    return parsed != null && parsed == 0;
+  }
+
   static LlmProvider openRouterDefault() => LlmProvider(
         id: 'openrouter',
         name: 'OpenRouter',
@@ -1799,6 +1844,12 @@ class _TranscribePageState extends State<TranscribePage> {
   List<String> _retryOptions = <String>[];
   String _selectedRetryOption = '';
 
+  // Results of stages that already succeeded. Groq transcription is never
+  // repeated: once the audio has been transcribed, a retry only re-runs the
+  // LLM stage against a different provider/model.
+  String? _rawTranscript;
+  String? _cleanedTranscript;
+
   @override
   void initState() {
     super.initState();
@@ -1810,19 +1861,24 @@ class _TranscribePageState extends State<TranscribePage> {
     setState(() {
       _isProcessing = true;
       _errorMessage = '';
-      _currentStep = ProcessingStep.uploading;
+      _currentStep = _rawTranscript == null
+          ? ProcessingStep.uploading
+          : ProcessingStep.processing;
     });
 
     try {
       final service = TranscriptionService();
 
-      // Stage 1: Whisper STT — shown as "Uploading"
-      final rawTranscript = await service.transcribe(widget.audioPath);
+      // Stage 1: Whisper STT — skipped when the audio was already transcribed.
+      final String rawTranscript = _rawTranscript ?? await service.transcribe(widget.audioPath);
+      _rawTranscript = rawTranscript;
 
-      // Stage 2: LLM Clean — shown as "Processing"
+      // Stage 2: LLM Clean — skipped when it already succeeded.
       if (!mounted) return;
       setState(() => _currentStep = ProcessingStep.processing);
-      final cleanedTranscript = await service.clean(rawTranscript);
+      final String cleanedTranscript =
+          _cleanedTranscript ?? await service.clean(rawTranscript);
+      _cleanedTranscript = cleanedTranscript;
 
       // Stage 3: LLM Polish — shown as "Processing" (continues)
       final polishedNote = await service.polish(rawTranscript);
@@ -1926,12 +1982,48 @@ class _TranscribePageState extends State<TranscribePage> {
                       const SizedBox(height: 20),
                       const Text('Processing Failed', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 12),
-                      Text(_errorMessage.contains('QUOTA_EXHAUSTED') 
-                        ? 'Quota Exhasted for this AI model. Please switch the model.' 
-                        : _errorMessage, 
-                        textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
+                      Text(
+                        _rawTranscript == null
+                            ? _errorMessage
+                            : _errorMessage.contains('QUOTA_EXHAUSTED')
+                                ? 'Quota exhausted for this AI model. Please switch the model.'
+                                : _errorMessage,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blueGrey.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.check_circle,
+                                color: Colors.green, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _rawTranscript == null
+                                    ? 'Groq still needs to transcribe the audio — Retry will send it to Groq again.'
+                                    : 'Audio already transcribed by Groq — Retry skips Groq and only re-runs the AI note step.',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.grey.shade700),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                       const SizedBox(height: 20),
-                      if (_retryOptions.isEmpty)
+                      if (_rawTranscript == null)
+                        const Text(
+                          'Speech-to-text failed, so there is nothing to polish yet. '
+                          'Check your Groq API key in Settings, then Retry.',
+                          textAlign: TextAlign.center,
+                        )
+                      else if (_retryOptions.isEmpty)
                         const Text(
                           'No LLM provider is configured. Connect one (e.g. Gemini) with the + button in Settings.',
                           textAlign: TextAlign.center,
@@ -1970,7 +2062,9 @@ class _TranscribePageState extends State<TranscribePage> {
                           ElevatedButton(
                             onPressed: _retryWithSelectedModel,
                             style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                            child: const Text('Retry'),
+                            child: Text(_rawTranscript == null
+                                ? 'Retry transcription'
+                                : 'Retry with this brain'),
                           ),
                         ],
                       )
@@ -2111,6 +2205,8 @@ class _SettingsPageState extends State<SettingsPage> {
   List<LlmProvider> _providers = <LlmProvider>[];
   String _primaryProviderId = '';
   bool _providersLoaded = false;
+  bool _refreshingFreeOpenRouterModels = false;
+  int? _openRouterModelsRefreshedAtMs;
 
   // --- TRANSLATION VARIABLES ---
   bool _enableTranslation = false;
@@ -2157,6 +2253,8 @@ class _SettingsPageState extends State<SettingsPage> {
         _selectedTargetLanguage = prefs.getString('target_language') ?? 'English';
         _autoCopyEnabled = prefs.getBool('auto_copy_enabled') ?? false;
         _autoCopyTarget = prefs.getString('auto_copy_target') ?? 'polished';
+        _openRouterModelsRefreshedAtMs =
+            prefs.getInt('openrouter_free_models_refreshed_at_ms');
         
         if (!_groqSttModels.contains(_selectedSttModel)) _selectedSttModel = _groqSttModels.first;
         if (!_targetLanguages.contains(_selectedTargetLanguage)) _selectedTargetLanguage = _targetLanguages.first;
@@ -2261,7 +2359,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Tap a provider to add its API key once — after that it opens its settings directly. The primary brain is tried first; every other connected provider is used automatically on rate-limit.',
+            'Tap a provider to add its API key once — after that it opens its settings directly. The primary brain is tried first; every other connected provider is used automatically if it fails for any reason.',
             style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
           ),
           const SizedBox(height: 12),
@@ -2301,6 +2399,35 @@ class _SettingsPageState extends State<SettingsPage> {
             )
           else
             ..._providers.map((LlmProvider provider) => _buildProviderRow(provider)),
+          if (_providers.any((LlmProvider p) => p.isOpenRouter)) ...[
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: _refreshingFreeOpenRouterModels
+                    ? null
+                    : _handleRefreshOpenRouterModels,
+                icon: _refreshingFreeOpenRouterModels
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh, size: 18),
+                label: Text(
+                  _refreshingFreeOpenRouterModels
+                      ? 'Refreshing free models…'
+                      : 'Retry free model list',
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              "Downloads OpenRouter's current model catalog and keeps only free models. "
+              'Last refreshed: ${_formatFreeModelRefreshTime(_openRouterModelsRefreshedAtMs)}.',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+          ],
           const SizedBox(height: 4),
           Text(
             'Flow: ${ProviderRegistry.flowLabel(_providers, _primaryProviderId)}',
@@ -2527,6 +2654,94 @@ class _SettingsPageState extends State<SettingsPage> {
     return '••••${trimmed.substring(trimmed.length - 4)}';
   }
 
+  /// Downloads the current OpenRouter `/models` catalog and keeps only models
+  /// whose prompt and completion prices are both zero. Returns the new count.
+  Future<int> _refreshFreeOpenRouterModels() async {
+    if (_refreshingFreeOpenRouterModels) return -1;
+
+    final int index =
+        _providers.indexWhere((LlmProvider p) => p.id == 'openrouter');
+    if (index < 0) {
+      throw Exception('OpenRouter is not in the provider list.');
+    }
+    final LlmProvider provider = _providers[index];
+
+    setState(() => _refreshingFreeOpenRouterModels = true);
+    try {
+      final Uri url = Uri.parse(ProviderRegistry.openRouterModelsUrl);
+      final Map<String, String> headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      // The catalog endpoint is public; a key is only sent when one exists.
+      if (provider.isConfigured) {
+        headers['Authorization'] = 'Bearer ${provider.apiKey}';
+      }
+      final http.Response response =
+          await http.get(url, headers: headers).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        throw Exception(
+            'Invalid OpenRouter API key. Update the key, then refresh again.');
+      }
+      if (response.statusCode == 429) {
+        throw Exception(
+            'OpenRouter rate-limited the refresh request. Wait a minute and retry.');
+      }
+      if (response.statusCode != 200) {
+        throw Exception(
+            'OpenRouter returned status ${response.statusCode} while refreshing models.');
+      }
+
+      final List<String> freshModels =
+          ProviderRegistry.freeOpenRouterModelIdsFromJson(response.body);
+      if (freshModels.isEmpty) {
+        throw Exception(
+            'OpenRouter did not return any free models. The key may lack access, or the catalog may be temporarily unavailable.');
+      }
+
+      final int refreshedAtMs = DateTime.now().millisecondsSinceEpoch;
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(
+          'openrouter_free_models_refreshed_at_ms', refreshedAtMs);
+      setState(() {
+        provider.models = freshModels;
+        if (!freshModels.contains(provider.model)) {
+          provider.model = freshModels.first;
+        }
+        _openRouterModelsRefreshedAtMs = refreshedAtMs;
+      });
+      await _persistProviders();
+      return freshModels.length;
+    } finally {
+      if (mounted) {
+        setState(() => _refreshingFreeOpenRouterModels = false);
+      } else {
+        _refreshingFreeOpenRouterModels = false;
+      }
+    }
+  }
+
+  /// Handles the Settings "Retry free model list" button.
+  Future<void> _handleRefreshOpenRouterModels() async {
+    try {
+      final int count = await _refreshFreeOpenRouterModels();
+      if (count < 0 || !mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('OpenRouter free models refreshed: $count available ✅')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Could not refresh free models: ${e.toString().replaceFirst('Exception: ', '')}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   Future<void> _persistProviders() async {
     final prefs = await SharedPreferences.getInstance();
     await ProviderRegistry.save(prefs, _providers, _primaryProviderId);
@@ -2649,6 +2864,16 @@ class _SettingsPageState extends State<SettingsPage> {
         );
       },
     );
+  }
+
+  String _formatFreeModelRefreshTime(int? refreshedAtMs) {
+    if (refreshedAtMs == null) return 'never';
+    final DateTime at =
+        DateTime.fromMillisecondsSinceEpoch(refreshedAtMs, isUtc: true)
+            .toLocal();
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${at.year}-${two(at.month)}-${two(at.day)} '
+        '${two(at.hour)}:${two(at.minute)}';
   }
 
   /// Provider sheet: connects a brand-new provider (with preset chips) or opens
@@ -3137,8 +3362,18 @@ class TranscriptionService {
     throw Exception('${provider.name} LLM error (${response.statusCode}): ${response.body}');
   }
 
-  /// Re-polish (✨ Try Again) with a specific provider + model. When that provider
-  /// is rate-limited, the other connected providers are tried automatically.
+  /// Combines one failed provider attempt into a compact error line.
+  static String providerFailureLine(String name, String model, Object error) {
+    final String detail =
+        error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
+    final String trimmed =
+        detail.length > 220 ? '${detail.substring(0, 220)}…' : detail;
+    return '$name ($model): $trimmed';
+  }
+
+  /// Re-polish (✨ Try Again) with a specific provider + model. When that attempt
+  /// fails with a recoverable provider error, the other connected providers
+  /// are tried automatically.
   Future<String> rePolishWithFallback(
     String rawTranscript, {
     required String providerId,
@@ -3166,31 +3401,39 @@ class TranscriptionService {
       ...configured.where((LlmProvider p) => p.id != chosen.id),
     ];
 
-    for (final LlmProvider provider in attempts) {
-      try {
-        return await _callProvider(
-          provider,
-          rawTranscript,
-          modelOverride: provider.id == chosen.id ? model : null,
-        );
-      } catch (e) {
-        if (_isRateLimited(e)) continue;
-        rethrow;
-      }
-    }
-    throw Exception(
-        'All LLM providers are rate-limited (${attempts.map((LlmProvider p) => p.name).join(', ')}). Please try again later.');
+    return _runProviderChain(
+      attempts,
+      (LlmProvider provider) => _callProvider(
+        provider,
+        rawTranscript,
+        modelOverride: provider.id == chosen.id ? model : null,
+      ),
+    );
   }
 
-  /// True when the error means "this provider cannot serve right now"
-  /// (429 / quota), in which case the next connected provider is used.
-  bool _isRateLimited(Object error) {
-    final String msg = error.toString().toLowerCase();
-    return msg.contains('429') ||
-        msg.contains('rate limit') ||
-        msg.contains('rate-limit') ||
-        msg.contains('quota') ||
-        msg.contains('resource_exhausted');
+  /// Shared fallback loop. Every recoverable provider error moves to the next
+  /// provider. Non-recoverable errors stop immediately. When every attempt
+  /// fails, all attempts are reported together.
+  Future<String> _runProviderChain(
+    List<LlmProvider> attempts,
+    Future<String> Function(LlmProvider provider) call,
+  ) async {
+    final List<String> failures = <String>[];
+    for (final LlmProvider provider in attempts) {
+      try {
+        return await call(provider);
+      } catch (e) {
+        // Every failure raised here belongs to one specific provider/model
+        // (bad key, retired model, quota, 5xx, timeout, network, …), so the
+        // next connected provider is always tried. Only when all of them fail
+        // is an aggregated, per-provider error shown to the user.
+        failures.add(TranscriptionService.providerFailureLine(
+            provider.name, provider.model, e));
+      }
+    }
+
+    throw Exception(
+        'Every connected LLM provider failed (${attempts.map((LlmProvider p) => p.name).join(', ')}).\n${failures.join('\n')}');
   }
 
   /// Tries the primary provider first, then every other connected provider
@@ -3209,16 +3452,11 @@ class TranscriptionService {
           'No LLM provider is configured. Connect one (e.g. Gemini) with the + button in Settings.');
     }
 
-    for (final LlmProvider provider in providers) {
-      try {
-        return await _callProvider(provider, transcript, systemPrompt: systemPrompt);
-      } catch (e) {
-        if (_isRateLimited(e)) continue;
-        rethrow;
-      }
-    }
-    throw Exception(
-        'All LLM providers are rate-limited (${providers.map((LlmProvider p) => p.name).join(', ')}). Please try again later or switch models in Settings.');
+    return _runProviderChain(
+      providers,
+      (LlmProvider provider) =>
+          _callProvider(provider, transcript, systemPrompt: systemPrompt),
+    );
   }
 }
 

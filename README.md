@@ -35,7 +35,9 @@ Because professionals, students, and creators are always on the go. Voice notes 
 ## ✨ Features
 - 🎙 **Instant Recording**: Minimalist UI with waveform visualizer and immediate startup.
 - 🧠 **AI Brain Animation**: Premium high-end feedback during processing.
-- 🔌 **Bring Your Own Provider**: OpenRouter and Gemini are preconfigured — tap **+** in Settings to connect any OpenAI-compatible provider (Groq, OpenAI, Mistral, a local server…) and it is used immediately, with automatic fallback on rate limits.
+- 🔌 **Bring Your Own Provider**: OpenRouter and Gemini are preconfigured — tap **+** in Settings to connect any OpenAI-compatible provider (Groq, OpenAI, Mistral, a local server…) and it is used immediately. If the primary brain fails for **any** reason (wrong key, retired model, rate limit, server error) the next connected provider answers instead of an error.
+- ⚡ **Smart Retry**: a retry never re-uploads the audio — once Groq has transcribed it, only the AI step re-runs against the model you pick.
+- 🔄 **Free Models Only**: a **Retry free model list** button in Settings pulls OpenRouter's live catalog and keeps just the models that are still free.
 - 🔑 **On-Device API Keys**: Keys stay on your device.
 - 📊 **Staged Progress**: Real-time tracking through **Uploading → Processing → Downloading**.
 - 📝 **Triple View Tabs**:
@@ -89,7 +91,7 @@ Because professionals, students, and creators are always on the go. Voice notes 
 
 ## 🛠 Roadmap
 - [x] Multi-language transcription (8 target languages via the polish prompt)
-- [ ] Provider-specific model auto-discovery (fetch `/models` from a connected provider)
+- [x] Provider-specific model auto-discovery (`Retry free model list` fetches OpenRouter's free models)
 
 ---
 
