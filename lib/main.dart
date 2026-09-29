@@ -2502,6 +2502,40 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  /// Clicking a provider: ask for the API key only while none is stored, then
+  /// open its settings directly.
+  Future<void> _openProvider(LlmProvider provider) async {
+    if (!provider.isConfigured) {
+      final bool connected = await _connectProvider(provider);
+      if (!connected || !mounted) return;
+    }
+    await _showProviderSheet(existing: provider);
+  }
+
+  /// Asks for a provider API key with a dialog and remembers it.
+  /// Returns true when a key was saved (false when the user cancelled).
+  Future<bool> _connectProvider(LlmProvider provider,
+      {bool prefillExisting = false}) async {
+    final String? key =
+        await _askForApiKey(provider, prefillExisting: prefillExisting);
+    if (key == null) return false;
+    setState(() => provider.apiKey = key);
+    await _persistProviders();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${provider.name} connected ✅')),
+      );
+    }
+    return true;
+  }
+
+  /// Last 4 characters of a saved key, used for the masked display.
+  String _maskedKey(String key) {
+    final String trimmed = key.trim();
+    if (trimmed.length <= 4) return '••••';
+    return '••••${trimmed.substring(trimmed.length - 4)}';
+  }
+
   Future<void> _persistProviders() async {
     final prefs = await SharedPreferences.getInstance();
     await ProviderRegistry.save(prefs, _providers, _primaryProviderId);
@@ -2545,8 +2579,83 @@ class _SettingsPageState extends State<SettingsPage> {
     await _persistProviders();
   }
 
-  /// "Connect a provider" sheet, opened by the "+" button next to a provider
-  /// (including the Gemini card) and by the edit pencil.
+  /// The API-key dialog. Returns the trimmed key, or null when cancelled.
+  Future<String?> _askForApiKey(LlmProvider provider,
+      {bool prefillExisting = false}) async {
+    final TextEditingController keyController = TextEditingController(
+        text: prefillExisting ? provider.apiKey : '');
+    bool obscure = true;
+    String? error;
+
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              title: Text('${provider.name} API key'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    prefillExisting
+                        ? 'Update or replace the key stored on this device.'
+                        : 'Paste your key once — the app remembers it for every future run.',
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: keyController,
+                    obscureText: obscure,
+                    autofocus: true,
+                    decoration: InputDecoration(
+                      labelText: 'API Key',
+                      hintText: 'Paste your ${provider.name} key',
+                      border: const OutlineInputBorder(),
+                      errorText: error,
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                            obscure ? Icons.visibility_off : Icons.visibility),
+                        tooltip: obscure ? 'Show key' : 'Hide key',
+                        onPressed: () =>
+                            setDialogState(() => obscure = !obscure),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final String key = keyController.text.trim();
+                    if (key.isEmpty) {
+                      setDialogState(
+                          () => error = 'Please paste your API key.');
+                      return;
+                    }
+                    Navigator.pop(ctx, key);
+                  },
+                  child: const Text('Save key'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Provider sheet: connects a brand-new provider (with preset chips) or opens
+  /// the settings of an already connected provider.
+  ///
+  /// Stored API keys never appear here as editable text — key entry always goes
+  /// through the dedicated `_askForApiKey` dialog, and the key is asked only
+  /// until one has been saved.
   Future<void> _showProviderSheet({LlmProvider? existing}) async {
     final bool isNew = existing == null;
     final ProviderPreset defaultPreset = ProviderRegistry.presets.first;
@@ -2554,8 +2663,6 @@ class _SettingsPageState extends State<SettingsPage> {
         TextEditingController(text: existing?.name ?? defaultPreset.name);
     final TextEditingController urlController =
         TextEditingController(text: existing?.baseUrl ?? defaultPreset.baseUrl);
-    final TextEditingController keyController =
-        TextEditingController(text: existing?.apiKey ?? '');
     final TextEditingController modelController = TextEditingController(
         text: existing?.model ??
             (defaultPreset.models.isNotEmpty ? defaultPreset.models.first : ''));
@@ -2595,29 +2702,85 @@ class _SettingsPageState extends State<SettingsPage> {
                       style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
                     ),
                     const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: ProviderRegistry.presets
-                          .map((ProviderPreset preset) => ChoiceChip(
-                                label: Text(preset.name),
-                                selected: selectedPreset == preset.name,
-                                onSelected: (_) {
-                                  setSheetState(() {
-                                    selectedPreset = preset.name;
-                                    nameController.text = preset.name;
-                                    urlController.text = preset.baseUrl;
-                                    modelsController.text = preset.models.join(', ');
-                                    modelController.text = preset.models.isNotEmpty
-                                        ? preset.models.first
-                                        : '';
-                                    error = null;
-                                  });
-                                },
-                              ))
-                          .toList(),
-                    ),
-                    const SizedBox(height: 16),
+                    if (isNew) ...[
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: ProviderRegistry.presets
+                            .map((ProviderPreset preset) => ChoiceChip(
+                                  label: Text(preset.name),
+                                  selected: selectedPreset == preset.name,
+                                  onSelected: (_) {
+                                    setSheetState(() {
+                                      selectedPreset = preset.name;
+                                      nameController.text = preset.name;
+                                      urlController.text = preset.baseUrl;
+                                      modelsController.text = preset.models.join(', ');
+                                      modelController.text = preset.models.isNotEmpty
+                                          ? preset.models.first
+                                          : '';
+                                      error = null;
+                                    });
+                                  },
+                                ))
+                            .toList(),
+                      ),
+                      const SizedBox(height: 16),
+                    ] else ...[
+                      Row(
+                        children: [
+                          Icon(
+                            existing.isConfigured
+                                ? Icons.check_circle
+                                : Icons.key_off,
+                            size: 18,
+                            color: existing.isConfigured
+                                ? Colors.green.shade700
+                                : Colors.orange.shade800,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              existing.isConfigured
+                                  ? 'API key saved ${_maskedKey(existing.apiKey)}'
+                                  : 'No API key saved yet',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: existing.isConfigured
+                                    ? Colors.grey.shade700
+                                    : Colors.orange.shade800,
+                              ),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              await _connectProvider(existing,
+                                  prefillExisting: existing.isConfigured);
+                              if (mounted) setSheetState(() {});
+                            },
+                            child: Text(existing.isConfigured
+                                ? 'Update key'
+                                : 'Add API key'),
+                          ),
+                          if (existing.isConfigured)
+                            TextButton(
+                              onPressed: () async {
+                                setState(() => existing.apiKey = '');
+                                await _persistProviders();
+                                setSheetState(() {});
+                              },
+                              child: const Text('Remove key'),
+                            ),
+                        ],
+                      ),
+                      const Divider(height: 8),
+                      Text('Provider settings',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey.shade600)),
+                      const SizedBox(height: 8),
+                    ],
                     TextField(
                       controller: nameController,
                       decoration: const InputDecoration(
@@ -2632,15 +2795,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       decoration: const InputDecoration(
                         labelText: 'Base URL',
                         hintText: 'https://api.example.com/v1',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: keyController,
-                      obscureText: true,
-                      decoration: const InputDecoration(
-                        labelText: 'API Key',
                         border: OutlineInputBorder(),
                       ),
                     ),
@@ -2675,7 +2829,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.red,
                             foregroundColor: Colors.white),
-                        onPressed: () {
+                        onPressed: () async {
                           final String name = nameController.text.trim();
                           final String url = urlController.text.trim();
                           final String model = modelController.text.trim();
@@ -2701,17 +2855,59 @@ class _SettingsPageState extends State<SettingsPage> {
                               .toList();
                           if (!models.contains(model)) models.insert(0, model);
                           Navigator.pop(ctx);
-                          _upsertProvider(
+                          final LlmProvider? saved = await _upsertProvider(
                             existing: existing,
                             name: name,
                             baseUrl: url,
-                            apiKey: keyController.text.trim(),
                             model: model,
                             models: models,
                           );
+                          if (isNew && saved != null && !saved.isConfigured) {
+                            // A provider created without a key is asked once,
+                            // right after it is created.
+                            await _openProvider(saved);
+                          }
                         },
                       ),
                     ),
+                    if (!isNew) ...[
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                setState(() => _primaryProviderId = existing.id);
+                                await _persistProviders();
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content: Text(
+                                            '${existing.name} is now the primary brain 🧠')),
+                                  );
+                                  setSheetState(() {});
+                                }
+                              },
+                              icon: const Icon(Icons.star, size: 18),
+                              label: const Text('Set as primary'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                Navigator.pop(ctx);
+                                await _removeProvider(existing);
+                              },
+                              icon: const Icon(Icons.delete_outline,
+                                  size: 18, color: Colors.red),
+                              label: const Text('Remove',
+                                  style: TextStyle(color: Colors.red)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 8),
                   ],
                 ),
@@ -2724,27 +2920,31 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   /// Persists a newly connected provider (or the edits of an existing one).
-  Future<void> _upsertProvider({
+  /// Keys are never edited here: pass `apiKey: null` to leave a stored key
+  /// untouched, or a new value to replace it when a dialog has collected one.
+  Future<LlmProvider?> _upsertProvider({
     LlmProvider? existing,
     required String name,
     required String baseUrl,
-    required String apiKey,
     required String model,
     required List<String> models,
+    String? apiKey,
   }) async {
+    LlmProvider? result;
     setState(() {
       if (existing != null) {
         existing.name = name;
         existing.baseUrl = baseUrl;
-        existing.apiKey = apiKey;
         existing.model = model;
         existing.models = List<String>.from(models);
+        if (apiKey != null) existing.apiKey = apiKey;
+        result = existing;
       } else {
         final LlmProvider created = LlmProvider(
           id: 'provider_${DateTime.now().millisecondsSinceEpoch}',
           name: name,
           baseUrl: baseUrl,
-          apiKey: apiKey,
+          apiKey: apiKey ?? '',
           model: model,
           models: models,
         );
@@ -2752,14 +2952,16 @@ class _SettingsPageState extends State<SettingsPage> {
         _providers.add(created);
         // The first provider ever connected becomes the primary brain.
         if (_primaryProviderId.isEmpty) _primaryProviderId = created.id;
+        result = created;
       }
     });
     await _persistProviders();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$name connected ✅')),
+        SnackBar(content: Text('$name saved ✅')),
       );
     }
+    return result;
   }
 }
 

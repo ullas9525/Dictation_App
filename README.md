@@ -80,8 +80,8 @@ Because professionals, students, and creators are always on the go. Voice notes 
 
 ## 🔐 API Key Setup
 1. **Speech-to-Text (required)**: get a Groq key at [console.groq.com](https://console.groq.com/) and paste it under **Settings → Groq API Key**.
-2. **LLM Brain (at least one required)**: paste a key into the **OpenRouter** or **Gemini** card, or press the **+** button next to a provider to connect another one:
-   - Presets: **Gemini**, **OpenRouter**, **Groq**, **OpenAI**, **Mistral** — or **Custom** for any OpenAI-compatible `/chat/completions` endpoint (just give it a name, base URL, key and model).
+2. **LLM Brain (at least one required)**: paste a key into the **OpenRouter** or **Gemini** card, or press the **+** button next to a provider to connect another one. Tap a provider entry once to paste its API key — it is remembered, and later taps open its settings directly:
+   - Presets: **Gemini**, **OpenRouter**, **Groq**, **OpenAI**, **Mistral** — or **Custom** for any OpenAI-compatible `/chat/completions` endpoint (just give it a name, base URL and model; the key is asked the first time you tap it).
    - Mark the provider you want tried first with ★ (**Set as primary**). Every other connected provider is then used automatically if the primary hits a rate limit.
 3. Tap **💾** to save. Keys are stored **only on your device**.
 
