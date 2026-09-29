@@ -327,6 +327,277 @@ class RecordingProvider with ChangeNotifier {
   }
 }
 
+// --- LLM Provider Registry (provider-independent) ---
+
+/// One LLM "brain" the app can talk to.
+///
+/// Every provider speaks the OpenAI-compatible
+/// `POST {baseUrl}/chat/completions` protocol (OpenRouter, Gemini, Groq, OpenAI,
+/// NVIDIA NIM, Together, a local vLLM...), which means a brand-new provider can
+/// be connected at runtime from the "+" button in Settings and is immediately
+/// usable for polishing — and as an automatic fallback.
+class LlmProvider {
+  final String id;
+  String name;
+  String baseUrl;
+  String apiKey;
+  String model;
+  List<String> models;
+
+  LlmProvider({
+    required this.id,
+    required this.name,
+    required this.baseUrl,
+    this.apiKey = '',
+    this.model = '',
+    List<String>? models,
+  }) : models = List<String>.from(models ?? const <String>[]);
+
+  bool get isOpenRouter => baseUrl.contains('openrouter.ai');
+
+  /// Editable base URL. It may be pasted with or without the trailing
+  /// `/chat/completions` — both forms are normalised here.
+  String get chatCompletionsUrl {
+    var base = baseUrl.trim();
+    while (base.endsWith('/')) {
+      base = base.substring(0, base.length - 1);
+    }
+    if (base.endsWith('/chat/completions')) return base;
+    return '$base/chat/completions';
+  }
+
+  /// A provider only takes part in the pipeline once it has an API key.
+  bool get isConfigured =>
+      apiKey.trim().isNotEmpty && chatCompletionsUrl.startsWith('http');
+
+  /// Keeps [model] consistent with the known [models] list.
+  void normalize() {
+    if (model.trim().isEmpty && models.isNotEmpty) {
+      model = models.first;
+    } else if (model.trim().isNotEmpty && models.isNotEmpty && !models.contains(model)) {
+      models = <String>[model, ...models];
+    }
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'id': id,
+        'name': name,
+        'baseUrl': baseUrl,
+        'apiKey': apiKey,
+        'model': model,
+        'models': models,
+      };
+
+  factory LlmProvider.fromJson(Map<String, dynamic> json) {
+    return LlmProvider(
+      id: (json['id'] ?? '').toString(),
+      name: (json['name'] ?? 'Provider').toString(),
+      baseUrl: (json['baseUrl'] ?? '').toString(),
+      apiKey: (json['apiKey'] ?? '').toString(),
+      model: (json['model'] ?? '').toString(),
+      models: (json['models'] as List<dynamic>? ?? const <dynamic>[])
+          .map<String>((dynamic m) => m.toString())
+          .toList(),
+    );
+  }
+}
+
+/// A suggested endpoint offered as a chip inside the "Connect a provider" sheet.
+class ProviderPreset {
+  final String name;
+  final String baseUrl;
+  final List<String> models;
+  const ProviderPreset(this.name, this.baseUrl, this.models);
+}
+
+/// Persists the connected providers (`llm_providers`) plus the id of the primary
+/// brain (`primary_provider_id`) in SharedPreferences.
+class ProviderRegistry {
+  static const String _providersKey = 'llm_providers';
+  static const String _primaryKey = 'primary_provider_id';
+
+  static const String openRouterBaseUrl = 'https://openrouter.ai/api/v1';
+  static const String geminiBaseUrl =
+      'https://generativelanguage.googleapis.com/v1beta/openai';
+
+  static const List<String> openRouterModels = <String>[
+    'cohere/north-mini-code:free',
+    'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+    'google/gemma-4-26b-a4b-it:free',
+    'google/gemma-4-31b-it:free',
+    'liquid/lfm-2.5-1.2b-instruct:free',
+    'liquid/lfm-2.5-1.2b-thinking:free',
+    'meta-llama/llama-3.2-3b-instruct:free',
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'nousresearch/hermes-3-llama-3.1-405b:free',
+    'nvidia/llama-nemotron-embed-vl-1b-v2:free',
+    'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
+    'nvidia/nemotron-3-nano-30b-a3b:free',
+    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+    'nvidia/nemotron-3-super-120b-a12b:free',
+    'nvidia/nemotron-3-ultra-550b-a55b:free',
+    'nvidia/nemotron-3.5-content-safety:free',
+    'nvidia/nemotron-nano-9b-v2:free',
+    'nvidia/nemotron-nano-12b-v2-vl:free',
+    'openai/gpt-oss-20b:free',
+    'openai/gpt-oss-120b:free',
+    'poolside/laguna-xs.2:free',
+    'poolside/laguna-m.1:free',
+    'qwen/qwen3-coder:free',
+    'qwen/qwen3-next-80b-a3b-instruct:free',
+  ];
+
+  static const List<String> geminiModels = <String>[
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash',
+  ];
+
+  /// Chips offered inside the "Connect a provider" sheet. "Custom" lets the user
+  /// point the app at any other OpenAI-compatible endpoint.
+  static const List<ProviderPreset> presets = <ProviderPreset>[
+    ProviderPreset('Gemini', geminiBaseUrl, geminiModels),
+    ProviderPreset('OpenRouter', openRouterBaseUrl, openRouterModels),
+    ProviderPreset('Groq', 'https://api.groq.com/openai/v1', <String>[
+      'llama-3.3-70b-versatile',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+    ]),
+    ProviderPreset('OpenAI', 'https://api.openai.com/v1', <String>[
+      'gpt-4o-mini',
+      'gpt-4o',
+    ]),
+    ProviderPreset('Mistral', 'https://api.mistral.ai/v1', <String>[
+      'mistral-small-latest',
+      'mistral-large-latest',
+    ]),
+    ProviderPreset('Custom', '', <String>[]),
+  ];
+
+  static LlmProvider openRouterDefault() => LlmProvider(
+        id: 'openrouter',
+        name: 'OpenRouter',
+        baseUrl: openRouterBaseUrl,
+        model: openRouterModels.first,
+        models: openRouterModels,
+      );
+
+  static LlmProvider geminiDefault() => LlmProvider(
+        id: 'gemini',
+        name: 'Gemini',
+        baseUrl: geminiBaseUrl,
+        model: geminiModels.first,
+        models: geminiModels,
+      );
+
+  /// Loads the connected providers. On the first run after this upgrade the
+  /// registry is seeded from the legacy flat settings.
+  static Future<List<LlmProvider>> load(SharedPreferences prefs) async {
+    final String? raw = prefs.getString(_providersKey);
+    if (raw == null) return _migrateLegacy(prefs);
+
+    List<LlmProvider> providers;
+    try {
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is! List) return _migrateLegacy(prefs);
+      providers = decoded
+          .whereType<Map<String, dynamic>>()
+          .map(LlmProvider.fromJson)
+          .where((LlmProvider p) => p.id.isNotEmpty && p.baseUrl.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return _migrateLegacy(prefs);
+    }
+    for (final LlmProvider p in providers) {
+      p.normalize();
+    }
+    return providers;
+  }
+
+  /// Seeds OpenRouter + Gemini from the legacy single-provider settings.
+  ///
+  /// NVIDIA used to be the hard-coded fallback; it is intentionally dropped here
+  /// in favour of Gemini, plus anything the user connects with the "+" button.
+  static Future<List<LlmProvider>> _migrateLegacy(SharedPreferences prefs) async {
+    final LlmProvider openRouter = openRouterDefault();
+    openRouter.apiKey = prefs.getString('openrouter_api_key') ?? '';
+    final String? legacyModel = prefs.getString('openrouter_model');
+    if (legacyModel != null && legacyModel.trim().isNotEmpty) {
+      openRouter.model = legacyModel.trim();
+    }
+    openRouter.normalize();
+
+    // `gemini_api_key` is left over from the old Gemini era and is reused if set.
+    final LlmProvider gemini = geminiDefault();
+    gemini.apiKey = prefs.getString('gemini_api_key') ?? '';
+    gemini.normalize();
+
+    final List<LlmProvider> providers = <LlmProvider>[openRouter, gemini];
+
+    final String? legacyPrimary = prefs.getString('primary_api');
+    String primaryId = openRouter.id;
+    if (legacyPrimary == 'gemini') {
+      primaryId = gemini.id;
+    } else if (legacyPrimary == 'nvidia') {
+      primaryId = openRouter.apiKey.isNotEmpty ? openRouter.id : gemini.id;
+    } else if (openRouter.apiKey.isEmpty && gemini.apiKey.isNotEmpty) {
+      primaryId = gemini.id;
+    }
+
+    await save(prefs, providers, primaryId);
+    for (final String legacyKey in const <String>[
+      'nvidia_api_key',
+      'nvidia_model',
+      'primary_api',
+    ]) {
+      await prefs.remove(legacyKey);
+    }
+    return providers;
+  }
+
+  static Future<void> save(
+    SharedPreferences prefs,
+    List<LlmProvider> providers,
+    String primaryId,
+  ) async {
+    await prefs.setString(
+      _providersKey,
+      jsonEncode(providers.map((LlmProvider p) => p.toJson()).toList()),
+    );
+    await prefs.setString(_primaryKey, resolvePrimaryId(providers, primaryId));
+  }
+
+  /// Guarantees the stored primary id always points at an existing provider.
+  static String resolvePrimaryId(List<LlmProvider> providers, String preferredId) {
+    if (providers.isEmpty) return '';
+    if (providers.any((LlmProvider p) => p.id == preferredId)) return preferredId;
+    return providers.first.id;
+  }
+
+  /// Primary brain first, then every other provider in the order it was added.
+  static List<LlmProvider> orderedForFallback(
+      List<LlmProvider> providers, String primaryId) {
+    if (providers.isEmpty) return <LlmProvider>[];
+    final int index = providers.indexWhere((LlmProvider p) => p.id == primaryId);
+    if (index <= 0) return List<LlmProvider>.from(providers);
+    final LlmProvider primary = providers[index];
+    return <LlmProvider>[
+      primary,
+      ...providers.where((LlmProvider p) => p.id != primary.id),
+    ];
+  }
+
+  /// Human-readable chain, e.g. `OpenRouter → Gemini → My Local LLM`.
+  static String flowLabel(List<LlmProvider> providers, String primaryId) {
+    final List<String> names = orderedForFallback(providers, primaryId)
+        .map((LlmProvider p) => p.name)
+        .toList();
+    if (names.isEmpty) return 'No provider connected yet — tap + to add one';
+    return names.join(' → ');
+  }
+}
+
 // --- Main Application Widget ---
 class VoiceNotesApp extends StatelessWidget {
   const VoiceNotesApp({super.key});
@@ -1123,7 +1394,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                 tooltip: 'Try Again with Another Model',
                 onPressed: noteProvider.isPolishing
                     ? null
-                    : () => _showTryAgainSheet(context, noteProvider),
+                    : () => _showTryAgainSheet(noteProvider),
               ),
               if (hasTranslation)
                 Padding(
@@ -1253,40 +1524,31 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
     );
   }
 
-  // --- Try Again with OpenRouter Brain Model ---
-  void _showTryAgainSheet(BuildContext context, NoteProvider provider) {
-    String _sheetModel = 'meta-llama/llama-3.2-3b-instruct:free';
-    final List<String> models = [
-      'cohere/north-mini-code:free',
-      'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
-      'google/gemma-4-26b-a4b-it:free',
-      'google/gemma-4-31b-it:free',
-      'liquid/lfm-2.5-1.2b-instruct:free',
-      'liquid/lfm-2.5-1.2b-thinking:free',
-      'meta-llama/llama-3.2-3b-instruct:free',
-      'meta-llama/llama-3.3-70b-instruct:free',
-      'nousresearch/hermes-3-llama-3.1-405b:free',
-      'nvidia/llama-nemotron-embed-vl-1b-v2:free',
-      'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
-      'nvidia/nemotron-3-nano-30b-a3b:free',
-      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-      'nvidia/nemotron-3-super-120b-a12b:free',
-      'nvidia/nemotron-3-ultra-550b-a55b:free',
-      'nvidia/nemotron-3.5-content-safety:free',
-      'nvidia/nemotron-nano-9b-v2:free',
-      'nvidia/nemotron-nano-12b-v2-vl:free',
-      'openai/gpt-oss-20b:free',
-      'openai/gpt-oss-120b:free',
-      'poolside/laguna-xs.2:free',
-      'poolside/laguna-m.1:free',
-      'qwen/qwen3-coder:free',
-      'qwen/qwen3-next-80b-a3b-instruct:free',
-    ];
-    SharedPreferences.getInstance().then((prefs) {
-      _sheetModel = prefs.getString('openrouter_model') ?? 'meta-llama/llama-3.2-3b-instruct:free';
-    });
+  // --- Try Again with any connected Brain ---
+  Future<void> _showTryAgainSheet(NoteProvider provider) async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<LlmProvider> all = await ProviderRegistry.load(prefs);
+    final String primaryId = prefs.getString('primary_provider_id') ?? '';
+    final List<LlmProvider> available = ProviderRegistry.orderedForFallback(all, primaryId)
+        .where((LlmProvider p) => p.isConfigured)
+        .toList();
+    if (available.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Connect an LLM provider (e.g. Gemini) in Settings first.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
 
-    showModalBottomSheet(
+    LlmProvider sheetProvider = available.first;
+    String sheetModel = sheetProvider.model;
+
+    await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -1300,20 +1562,60 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Try Again with OpenRouter Brain Model',
+                  const Text('Try Again with Another Brain',
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
-                    value: models.contains(_sheetModel) ? _sheetModel : (models.isNotEmpty ? models.first : null),
+                    value: sheetProvider.id,
                     decoration: InputDecoration(
-                      labelText: 'Select OpenRouter Model',
+                      labelText: 'Provider',
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    items: models
-                        .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                    items: available
+                        .map((LlmProvider p) => DropdownMenuItem<String>(
+                              value: p.id,
+                              child: Text(p.name),
+                            ))
                         .toList(),
-                    onChanged: (v) => setSheetState(() => _sheetModel = v!),
+                    onChanged: (String? v) {
+                      if (v == null) return;
+                      final LlmProvider picked =
+                          available.firstWhere((LlmProvider p) => p.id == v);
+                      setSheetState(() {
+                        sheetProvider = picked;
+                        sheetModel = picked.model.isNotEmpty
+                            ? picked.model
+                            : (picked.models.isNotEmpty ? picked.models.first : '');
+                      });
+                    },
                   ),
+                  const SizedBox(height: 16),
+                  if (sheetProvider.models.isEmpty)
+                    TextField(
+                      decoration: const InputDecoration(
+                        labelText: 'Model',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (v) => sheetModel = v.trim(),
+                    )
+                  else
+                    DropdownButtonFormField<String>(
+                      value: sheetProvider.models.contains(sheetModel)
+                          ? sheetModel
+                          : sheetProvider.models.first,
+                      decoration: InputDecoration(
+                        labelText: 'Model',
+                        border:
+                            OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      items: sheetProvider.models
+                          .map((String m) => DropdownMenuItem<String>(
+                                value: m,
+                                child: Text(m, overflow: TextOverflow.ellipsis),
+                              ))
+                          .toList(),
+                      onChanged: (v) => setSheetState(() => sheetModel = v!),
+                    ),
                   const SizedBox(height: 16),
                   SizedBox(
                     width: double.infinity,
@@ -1324,7 +1626,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                           backgroundColor: Colors.red, foregroundColor: Colors.white),
                       onPressed: () {
                         Navigator.pop(ctx);
-                        _rePolishWithModel(context, provider, _sheetModel);
+                        _rePolishWithProvider(provider, sheetProvider, sheetModel);
                       },
                     ),
                   ),
@@ -1338,32 +1640,18 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
     );
   }
 
-  Future<void> _rePolishWithModel(BuildContext context, NoteProvider provider, String model) async {
-    final prefs = await SharedPreferences.getInstance();
-    final orKey = prefs.getString('openrouter_api_key') ?? '';
-    final nvKey = prefs.getString('nvidia_api_key') ?? '';
-    if (orKey.isEmpty && nvKey.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please set an LLM API Key (OpenRouter or NVIDIA) in Settings first.'), backgroundColor: Colors.orange),
-        );
-      }
-      return;
-    }
+  /// Re-polishes with the chosen provider + model, automatically falling back to
+  /// the other connected providers when that one is rate-limited.
+  Future<void> _rePolishWithProvider(
+      NoteProvider provider, LlmProvider target, String model) async {
     provider.setPolishing(true);
     try {
       final service = TranscriptionService();
-      String newNote;
-      try {
-        newNote = await service.rePolishDirect(provider.rawTranscript, orKey, model);
-      } catch (e) {
-        final msg = e.toString();
-        if ((msg.contains('429') || msg.contains('QUOTA_EXHAUSTED') || msg.contains('rate limit') || msg.contains('quota')) && nvKey.isNotEmpty) {
-          newNote = await service.rePolishNVIDIA(provider.rawTranscript, nvKey);
-        } else {
-          rethrow;
-        }
-      }
+      final String newNote = await service.rePolishWithFallback(
+        provider.rawTranscript,
+        providerId: target.id,
+        model: model,
+      );
       provider.updatePolishedNote(newNote);
       _lastPolished = '';
       if (mounted) {
@@ -1503,33 +1791,9 @@ class _TranscribePageState extends State<TranscribePage> {
   String _errorMessage = '';
   ProcessingStep _currentStep = ProcessingStep.uploading;
 
-  String _selectedModel = 'meta-llama/llama-3.2-3b-instruct:free';
-  final List<String> _supportedModels = [
-    'cohere/north-mini-code:free',
-    'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
-    'google/gemma-4-26b-a4b-it:free',
-    'google/gemma-4-31b-it:free',
-    'liquid/lfm-2.5-1.2b-instruct:free',
-    'liquid/lfm-2.5-1.2b-thinking:free',
-    'meta-llama/llama-3.2-3b-instruct:free',
-    'meta-llama/llama-3.3-70b-instruct:free',
-    'nousresearch/hermes-3-llama-3.1-405b:free',
-    'nvidia/llama-nemotron-embed-vl-1b-v2:free',
-    'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
-    'nvidia/nemotron-3-nano-30b-a3b:free',
-    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-    'nvidia/nemotron-3-super-120b-a12b:free',
-    'nvidia/nemotron-3-ultra-550b-a55b:free',
-    'nvidia/nemotron-3.5-content-safety:free',
-    'nvidia/nemotron-nano-9b-v2:free',
-    'nvidia/nemotron-nano-12b-v2-vl:free',
-    'openai/gpt-oss-20b:free',
-    'openai/gpt-oss-120b:free',
-    'poolside/laguna-xs.2:free',
-    'poolside/laguna-m.1:free',
-    'qwen/qwen3-coder:free',
-    'qwen/qwen3-next-80b-a3b-instruct:free',
-  ];
+  // Retry options built from the provider registry: "<providerId>|<model>".
+  List<String> _retryOptions = <String>[];
+  String _selectedRetryOption = '';
 
   @override
   void initState() {
@@ -1572,13 +1836,55 @@ class _TranscribePageState extends State<TranscribePage> {
         });
       }
     } catch (e) {
+      // Offer every model of every connected provider so a retry can switch
+      // brains without leaving the flow.
+      final List<String> retryOptions = await _loadRetryOptions();
       if (mounted) {
         setState(() {
           _isProcessing = false;
           _errorMessage = e.toString().replaceFirst('Exception: ', '');
+          _retryOptions = retryOptions;
+          if (!retryOptions.contains(_selectedRetryOption)) {
+            _selectedRetryOption = retryOptions.isNotEmpty ? retryOptions.first : '';
+          }
         });
       }
     }
+  }
+
+  /// `"<providerId>|<model>"` entries for every provider that has an API key.
+  Future<List<String>> _loadRetryOptions() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<LlmProvider> providers = await ProviderRegistry.load(prefs);
+    final String primaryId = prefs.getString('primary_provider_id') ?? '';
+    final List<String> options = <String>[];
+    for (final LlmProvider provider
+        in ProviderRegistry.orderedForFallback(providers, primaryId)) {
+      if (!provider.isConfigured) continue;
+      final List<String> models =
+          provider.models.isEmpty ? <String>[provider.model] : provider.models;
+      for (final String model in models) {
+        if (model.trim().isEmpty) continue;
+        options.add('${provider.id}|$model');
+      }
+    }
+    return options;
+  }
+
+  /// Applies the model picked on the error screen (making its provider the
+  /// primary brain) and runs the pipeline again.
+  Future<void> _retryWithSelectedModel() async {
+    final List<String> parts = _selectedRetryOption.split('|');
+    if (parts.length == 2) {
+      final prefs = await SharedPreferences.getInstance();
+      final List<LlmProvider> providers = await ProviderRegistry.load(prefs);
+      final int index = providers.indexWhere((LlmProvider p) => p.id == parts[0]);
+      if (index >= 0) {
+        providers[index].model = parts[1];
+        await ProviderRegistry.save(prefs, providers, providers[index].id);
+      }
+    }
+    await _startProcessing();
   }
 
   @override
@@ -1621,28 +1927,35 @@ class _TranscribePageState extends State<TranscribePage> {
                         : _errorMessage, 
                         textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
                       const SizedBox(height: 20),
-                      ListTile(
-                        title: const Text('Model Selection'),
-                        subtitle: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: _selectedModel,
-                            isExpanded: true,
-                            items: _supportedModels.map((String value) {
-                              return DropdownMenuItem<String>(
-                                value: value,
-                                child: Text(value),
-                              );
-                            }).toList(),
-                            onChanged: (String? newValue) {
-                              if (newValue != null) {
-                                setState(() {
-                                  _selectedModel = newValue;
-                                });
-                              }
-                            },
+                      if (_retryOptions.isEmpty)
+                        const Text(
+                          'No LLM provider is configured. Connect one (e.g. Gemini) with the + button in Settings.',
+                          textAlign: TextAlign.center,
+                        )
+                      else
+                        ListTile(
+                          title: const Text('Try another brain model'),
+                          subtitle: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: _selectedRetryOption,
+                              isExpanded: true,
+                              items: _retryOptions.map((String option) {
+                                return DropdownMenuItem<String>(
+                                  value: option,
+                                  child: Text(option.replaceFirst('|', ' · '),
+                                      overflow: TextOverflow.ellipsis),
+                                );
+                              }).toList(),
+                              onChanged: (String? newValue) {
+                                if (newValue != null) {
+                                  setState(() {
+                                    _selectedRetryOption = newValue;
+                                  });
+                                }
+                              },
+                            ),
                           ),
                         ),
-                      ),
                       const SizedBox(height: 20),
                       Wrap(
                         alignment: WrapAlignment.center,
@@ -1651,7 +1964,7 @@ class _TranscribePageState extends State<TranscribePage> {
                         children: [
                           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Go Back')),
                           ElevatedButton(
-                            onPressed: _startProcessing,
+                            onPressed: _retryWithSelectedModel,
                             style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
                             child: const Text('Retry'),
                           ),
@@ -1788,55 +2101,12 @@ class _SettingsPageState extends State<SettingsPage> {
   String _groqApiKey = '';
   String _selectedSttModel = 'whisper-large-v3';
 
-  // --- LLM PROVIDER STATE ---
-  String _openRouterApiKey = '';
-  String _nvidiaApiKey = '';
-  String _primaryApi = 'openrouter'; // 'openrouter' or 'nvidia'
-  String _selectedOpenRouterModel = 'meta-llama/llama-3.2-3b-instruct:free';
-
-  String _selectedNvidiaModel = 'deepseek-ai/deepseek-v4-flash';
-
-  final List<String> _nvidiaModels = [
-    'deepseek-ai/deepseek-v4-flash',
-    'deepseek-ai/deepseek-v4-pro',
-    'google/gemma-3-27b-it',
-    'google/gemma-4-31b-it',
-    'nvidia/llama-3.3-nemotron-super-49b-v1.5',
-    'nvidia/nemotron-3-nano-30b-a3b',
-    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
-    'nvidia/nemotron-3-super-120b-a12b',
-    'nvidia/nemotron-3.5-content-safety',
-    'nvidia/nvidia-nemotron-nano-9b-v2',
-    'openai/gpt-oss-20b',
-    'openai/gpt-oss-120b',
-  ];
-
-  final List<String> _openRouterModels = [
-    'cohere/north-mini-code:free',
-    'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
-    'google/gemma-4-26b-a4b-it:free',
-    'google/gemma-4-31b-it:free',
-    'liquid/lfm-2.5-1.2b-instruct:free',
-    'liquid/lfm-2.5-1.2b-thinking:free',
-    'meta-llama/llama-3.2-3b-instruct:free',
-    'meta-llama/llama-3.3-70b-instruct:free',
-    'nousresearch/hermes-3-llama-3.1-405b:free',
-    'nvidia/llama-nemotron-embed-vl-1b-v2:free',
-    'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
-    'nvidia/nemotron-3-nano-30b-a3b:free',
-    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-    'nvidia/nemotron-3-super-120b-a12b:free',
-    'nvidia/nemotron-3-ultra-550b-a55b:free',
-    'nvidia/nemotron-3.5-content-safety:free',
-    'nvidia/nemotron-nano-9b-v2:free',
-    'nvidia/nemotron-nano-12b-v2-vl:free',
-    'openai/gpt-oss-20b:free',
-    'openai/gpt-oss-120b:free',
-    'poolside/laguna-xs.2:free',
-    'poolside/laguna-m.1:free',
-    'qwen/qwen3-coder:free',
-    'qwen/qwen3-next-80b-a3b-instruct:free',
-  ];
+  // --- LLM PROVIDER REGISTRY (provider-independent) ---
+  /// Every connected "brain". Seeded with OpenRouter + Gemini, and extendable at
+  /// runtime through the "+" button that sits next to a provider card.
+  List<LlmProvider> _providers = <LlmProvider>[];
+  String _primaryProviderId = '';
+  bool _providersLoaded = false;
 
   // --- TRANSLATION VARIABLES ---
   bool _enableTranslation = false;
@@ -1870,23 +2140,21 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    final providers = await ProviderRegistry.load(prefs);
     if (mounted) {
       setState(() {
         _groqApiKey = prefs.getString('groq_api_key') ?? '';
         _selectedSttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
-        _openRouterApiKey = prefs.getString('openrouter_api_key') ?? '';
-        _nvidiaApiKey = prefs.getString('nvidia_api_key') ?? '';
-        _primaryApi = prefs.getString('primary_api') ?? 'openrouter';
-        _selectedNvidiaModel = prefs.getString('nvidia_model') ?? 'deepseek-ai/deepseek-v4-flash';
-        _selectedOpenRouterModel = prefs.getString('openrouter_model') ?? 'meta-llama/llama-3.2-3b-instruct:free';
+        _providers = providers;
+        _primaryProviderId = ProviderRegistry.resolvePrimaryId(
+            providers, prefs.getString('primary_provider_id') ?? '');
+        _providersLoaded = true;
         _enableTranslation = prefs.getBool('enable_translation') ?? false;
         _selectedTargetLanguage = prefs.getString('target_language') ?? 'English';
         _autoCopyEnabled = prefs.getBool('auto_copy_enabled') ?? false;
         _autoCopyTarget = prefs.getString('auto_copy_target') ?? 'polished';
         
         if (!_groqSttModels.contains(_selectedSttModel)) _selectedSttModel = _groqSttModels.first;
-        if (!_openRouterModels.contains(_selectedOpenRouterModel)) _selectedOpenRouterModel = _openRouterModels.first;
-        if (!_nvidiaModels.contains(_selectedNvidiaModel)) _selectedNvidiaModel = _nvidiaModels.first;
         if (!_targetLanguages.contains(_selectedTargetLanguage)) _selectedTargetLanguage = _targetLanguages.first;
       });
     }
@@ -1896,11 +2164,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('groq_api_key', _groqApiKey);
     await prefs.setString('groq_stt_model', _selectedSttModel);
-    await prefs.setString('openrouter_api_key', _openRouterApiKey);
-    await prefs.setString('nvidia_api_key', _nvidiaApiKey);
-    await prefs.setString('primary_api', _primaryApi);
-    await prefs.setString('nvidia_model', _selectedNvidiaModel);
-    await prefs.setString('openrouter_model', _selectedOpenRouterModel);
+    await ProviderRegistry.save(prefs, _providers, _primaryProviderId);
     await prefs.setBool('enable_translation', _enableTranslation);
     await prefs.setString('target_language', _selectedTargetLanguage);
     await prefs.setBool('auto_copy_enabled', _autoCopyEnabled);
@@ -1981,126 +2245,70 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const SizedBox(height: 24),
-          _buildSectionTitle(_primaryApi == 'openrouter' ? 'OpenRouter (LLM Brain)' : 'OpenRouter (LLM Fallback)'),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey.shade400, width: 1),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('OpenRouter API Key', style: TextStyle(fontSize: 14, color: Colors.grey)),
-                TextField(
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    hintText: 'Paste your OpenRouter API key here',
-                    border: InputBorder.none,
-                    isDense: true,
-                  ),
-                  onChanged: (value) => _openRouterApiKey = value,
-                  controller: TextEditingController(text: _openRouterApiKey)
-                    ..selection = TextSelection.collapsed(offset: _openRouterApiKey.length),
-                ),
-                const Divider(height: 16),
-                DropdownButtonFormField<String>(
-                  value: _openRouterModels.contains(_selectedOpenRouterModel) ? _selectedOpenRouterModel : _openRouterModels.first,
-                  decoration: InputDecoration(
-                    labelText: _primaryApi == 'openrouter' ? '🧠 Brain (LLM) Model' : '🧠 Fallback (LLM) Model',
-                    border: InputBorder.none,
-                    isDense: true,
-                  ),
-                  items: _openRouterModels
-                      .map((m) => DropdownMenuItem(value: m, child: Text(m, overflow: TextOverflow.ellipsis)))
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedOpenRouterModel = v!),
-                ),
-              ],
-            ),
+          Row(
+            children: [
+              Expanded(child: _buildSectionTitle('LLM Brain Providers')),
+              IconButton(
+                icon: const Icon(Icons.add_circle_outline),
+                tooltip: 'Connect a new provider',
+                onPressed: () => _showProviderSheet(),
+              ),
+            ],
           ),
-          const SizedBox(height: 24),
-          _buildSectionTitle(_primaryApi == 'nvidia' ? 'NVIDIA (LLM Brain)' : 'NVIDIA (LLM Fallback)'),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey.shade400, width: 1),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('NVIDIA API Key', style: TextStyle(fontSize: 14, color: Colors.grey)),
-                const SizedBox(height: 4),
-                TextField(
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    hintText: 'Paste your NVIDIA API key here',
-                    border: InputBorder.none,
-                    isDense: true,
-                  ),
-                  onChanged: (value) => _nvidiaApiKey = value,
-                  controller: TextEditingController(text: _nvidiaApiKey)
-                    ..selection = TextSelection.collapsed(offset: _nvidiaApiKey.length),
-                ),
-                const Divider(height: 16),
-                DropdownButtonFormField<String>(
-                  value: _nvidiaModels.contains(_selectedNvidiaModel) ? _selectedNvidiaModel : _nvidiaModels.first,
-                  decoration: InputDecoration(
-                    labelText: _primaryApi == 'nvidia' ? '🧠 Brain (LLM) Model' : '🧠 Fallback (LLM) Model',
-                    border: InputBorder.none,
-                    isDense: true,
-                  ),
-                  items: _nvidiaModels
-                      .map((m) => DropdownMenuItem(value: m, child: Text(m, overflow: TextOverflow.ellipsis)))
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedNvidiaModel = v!),
-                ),
-              ],
-            ),
+          const SizedBox(height: 4),
+          Text(
+            'Tap a provider to add its API key once — after that it opens its settings directly. The primary brain is tried first; every other connected provider is used automatically on rate-limit.',
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
           ),
-          const SizedBox(height: 24),
-          _buildSectionTitle('Primary API Priority'),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey.shade400, width: 1),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Select which LLM provider to try first. On rate-limit, the other is used automatically.',
-                  style: TextStyle(fontSize: 13, color: Colors.grey),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildApiOption('OpenRouter', Icons.rocket_launch, _primaryApi == 'openrouter', () {
-                        setState(() => _primaryApi = 'openrouter');
-                      }),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _buildApiOption('NVIDIA', Icons.memory, _primaryApi == 'nvidia', () {
-                        setState(() => _primaryApi = 'nvidia');
-                      }),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _primaryApi == 'openrouter'
-                      ? 'Flow: OpenRouter → (429) → NVIDIA'
-                      : 'Flow: NVIDIA → (429) → OpenRouter',
-                  style: TextStyle(fontSize: 13, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
-                ),
-              ],
+          const SizedBox(height: 12),
+          if (!_providersLoaded)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(12.0),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (_providers.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade400, width: 1),
+              ),
+              child: Column(
+                children: [
+                  const Text('No provider connected yet.',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Tap + to connect Gemini, OpenRouter, or any other provider.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 10),
+                  ElevatedButton.icon(
+                    onPressed: () => _showProviderSheet(),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Connect a provider'),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red, foregroundColor: Colors.white),
+                  ),
+                ],
+              ),
+            )
+          else
+            ..._providers.map((LlmProvider provider) => _buildProviderRow(provider)),
+          const SizedBox(height: 4),
+          Text(
+            'Flow: ${ProviderRegistry.flowLabel(_providers, _primaryProviderId)}',
+            style: TextStyle(
+                fontSize: 13, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => _showProviderSheet(),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Connect another provider'),
             ),
           ),
           const SizedBox(height: 24),
@@ -2227,30 +2435,331 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _buildApiOption(String title, IconData icon, bool isSelected, VoidCallback onTap) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
+  /// Compact, tappable entry for one provider.
+  ///
+  /// Tapping it asks for the API key **only while none is stored**; once a key
+  /// has been saved the provider opens its settings directly. The "+" icon
+  /// connects yet another provider.
+  Widget _buildProviderRow(LlmProvider provider) {
+    final bool isPrimary = provider.id == _primaryProviderId;
+    final bool isConnected = provider.isConfigured;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16),
         decoration: BoxDecoration(
-          color: isSelected ? colorScheme.primary.withOpacity(0.1) : Colors.transparent,
-          border: Border.all(color: isSelected ? colorScheme.primary : Colors.grey),
           borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isPrimary ? Colors.red : Colors.grey.shade400,
+            width: isPrimary ? 1.5 : 1,
+          ),
         ),
-        child: Column(
-          children: [
-            Icon(icon, color: isSelected ? colorScheme.primary : Colors.grey),
-            const SizedBox(height: 6),
-            Text(title, style: TextStyle(
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              color: isSelected ? colorScheme.primary : Colors.grey,
-            )),
-          ],
+        child: ListTile(
+          onTap: () => _openProvider(provider),
+          contentPadding: const EdgeInsets.only(left: 12, right: 4),
+          leading: Icon(
+            isPrimary ? Icons.psychology : Icons.memory,
+            color: isPrimary ? Colors.red : Colors.grey,
+          ),
+          title: Text(
+            isPrimary ? '${provider.name} · primary brain' : provider.name,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          subtitle: Text(
+            isConnected
+                ? '✅ Connected · ${provider.model}'
+                : 'No API key yet — tap to add it',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              color: isConnected ? Colors.green.shade700 : Colors.orange.shade800,
+            ),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: Icon(
+                  isPrimary ? Icons.star : Icons.star_border,
+                  color: isPrimary ? Colors.amber : Colors.grey,
+                  size: 20,
+                ),
+                tooltip: isPrimary ? 'Primary brain' : 'Set as primary brain',
+                onPressed: isPrimary ? null : () => _setPrimaryProvider(provider),
+              ),
+              IconButton(
+                icon: const Icon(Icons.add, size: 20),
+                tooltip: 'Connect a new provider',
+                onPressed: () => _showProviderSheet(),
+              ),
+              Icon(isConnected ? Icons.chevron_right : Icons.key,
+                  color: Colors.grey),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  Future<void> _persistProviders() async {
+    final prefs = await SharedPreferences.getInstance();
+    await ProviderRegistry.save(prefs, _providers, _primaryProviderId);
+  }
+
+  Future<void> _setPrimaryProvider(LlmProvider provider) async {
+    setState(() => _primaryProviderId = provider.id);
+    await _persistProviders();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${provider.name} is now the primary brain 🧠')),
+      );
+    }
+  }
+
+  Future<void> _removeProvider(LlmProvider provider) async {
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text('Remove ${provider.name}?'),
+            content: const Text('Its API key will be deleted from this device.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Remove'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    setState(() {
+      _providers.removeWhere((LlmProvider p) => p.id == provider.id);
+      _primaryProviderId =
+          ProviderRegistry.resolvePrimaryId(_providers, _primaryProviderId);
+    });
+    await _persistProviders();
+  }
+
+  /// "Connect a provider" sheet, opened by the "+" button next to a provider
+  /// (including the Gemini card) and by the edit pencil.
+  Future<void> _showProviderSheet({LlmProvider? existing}) async {
+    final bool isNew = existing == null;
+    final ProviderPreset defaultPreset = ProviderRegistry.presets.first;
+    final TextEditingController nameController =
+        TextEditingController(text: existing?.name ?? defaultPreset.name);
+    final TextEditingController urlController =
+        TextEditingController(text: existing?.baseUrl ?? defaultPreset.baseUrl);
+    final TextEditingController keyController =
+        TextEditingController(text: existing?.apiKey ?? '');
+    final TextEditingController modelController = TextEditingController(
+        text: existing?.model ??
+            (defaultPreset.models.isNotEmpty ? defaultPreset.models.first : ''));
+    final TextEditingController modelsController = TextEditingController(
+        text: (existing?.models ?? defaultPreset.models).join(', '));
+    String selectedPreset = existing?.name ?? defaultPreset.name;
+    String? error;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isNew ? 'Connect a provider' : 'Edit ${existing.name}',
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Any endpoint that speaks the OpenAI-compatible /chat/completions API works — the app uses it immediately.',
+                      style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: ProviderRegistry.presets
+                          .map((ProviderPreset preset) => ChoiceChip(
+                                label: Text(preset.name),
+                                selected: selectedPreset == preset.name,
+                                onSelected: (_) {
+                                  setSheetState(() {
+                                    selectedPreset = preset.name;
+                                    nameController.text = preset.name;
+                                    urlController.text = preset.baseUrl;
+                                    modelsController.text = preset.models.join(', ');
+                                    modelController.text = preset.models.isNotEmpty
+                                        ? preset.models.first
+                                        : '';
+                                    error = null;
+                                  });
+                                },
+                              ))
+                          .toList(),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Provider name',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: urlController,
+                      keyboardType: TextInputType.url,
+                      decoration: const InputDecoration(
+                        labelText: 'Base URL',
+                        hintText: 'https://api.example.com/v1',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: keyController,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'API Key',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: modelController,
+                      decoration: const InputDecoration(
+                        labelText: 'Default model',
+                        hintText: 'e.g. gemini-2.5-flash',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: modelsController,
+                      decoration: const InputDecoration(
+                        labelText: 'More models (comma separated, optional)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    if (error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(error!, style: const TextStyle(color: Colors.red)),
+                    ],
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.check),
+                        label:
+                            Text(isNew ? 'Connect provider' : 'Save provider'),
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white),
+                        onPressed: () {
+                          final String name = nameController.text.trim();
+                          final String url = urlController.text.trim();
+                          final String model = modelController.text.trim();
+                          if (name.isEmpty) {
+                            setSheetState(
+                                () => error = 'Please enter a provider name.');
+                            return;
+                          }
+                          if (!url.startsWith('http')) {
+                            setSheetState(() => error =
+                                'Please enter a valid base URL starting with http.');
+                            return;
+                          }
+                          if (model.isEmpty) {
+                            setSheetState(
+                                () => error = 'Please enter a model name.');
+                            return;
+                          }
+                          final List<String> models = modelsController.text
+                              .split(',')
+                              .map((String m) => m.trim())
+                              .where((String m) => m.isNotEmpty)
+                              .toList();
+                          if (!models.contains(model)) models.insert(0, model);
+                          Navigator.pop(ctx);
+                          _upsertProvider(
+                            existing: existing,
+                            name: name,
+                            baseUrl: url,
+                            apiKey: keyController.text.trim(),
+                            model: model,
+                            models: models,
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Persists a newly connected provider (or the edits of an existing one).
+  Future<void> _upsertProvider({
+    LlmProvider? existing,
+    required String name,
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+    required List<String> models,
+  }) async {
+    setState(() {
+      if (existing != null) {
+        existing.name = name;
+        existing.baseUrl = baseUrl;
+        existing.apiKey = apiKey;
+        existing.model = model;
+        existing.models = List<String>.from(models);
+      } else {
+        final LlmProvider created = LlmProvider(
+          id: 'provider_${DateTime.now().millisecondsSinceEpoch}',
+          name: name,
+          baseUrl: baseUrl,
+          apiKey: apiKey,
+          model: model,
+          models: models,
+        );
+        created.normalize();
+        _providers.add(created);
+        // The first provider ever connected becomes the primary brain.
+        if (_primaryProviderId.isEmpty) _primaryProviderId = created.id;
+      }
+    });
+    await _persistProviders();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$name connected ✅')),
+      );
+    }
   }
 }
 
@@ -2258,8 +2767,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
 class TranscriptionService {
   static const String _groqBaseUrl = 'https://api.groq.com/openai/v1';
-  static const String _openRouterBaseUrl = 'https://openrouter.ai/api/v1';
-  static const String _nvidiaBaseUrl = 'https://integrate.api.nvidia.com/v1';
 
   static const String _polishSystemPrompt =
       'You are a professional secretary and expert note-taker. '
@@ -2355,91 +2862,48 @@ class TranscriptionService {
     throw Exception('Groq Whisper error (${response.statusCode}): ${response.body}');
   }
 
-  Future<String> _callOpenRouterLLM(String transcript, String apiKey, String llmModel, {String? systemPrompt}) async {
-    if (systemPrompt == null) {
-      final prefs = await SharedPreferences.getInstance();
-      bool translate = prefs.getBool('enable_translation') ?? false;
-      String targetedLanguage = prefs.getString('target_language') ?? 'English';
-      systemPrompt = translate
-          ? _polishSystemPrompt + '\n\nAlso, translate the entire cleaned and structured output into $targetedLanguage. Ensure the final note is written completely in $targetedLanguage.'
-          : _polishSystemPrompt;
-    }
-
-    final url = Uri.parse('$_openRouterBaseUrl/chat/completions');
-    final response = await http
-        .post(
-          url,
-          headers: {
-            'Authorization': 'Bearer $apiKey',
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://github.com/ullas9525/Dictation_App',
-            'X-Title': 'Voice Notes App',
-          },
-          body: jsonEncode({
-            'model': llmModel,
-            'messages': [
-              {'role': 'system', 'content': systemPrompt},
-              {'role': 'user', 'content': 'PROCESS THIS TRANSCRIPT:\n\n$transcript'},
-            ],
-            'temperature': 0.3,
-            'max_tokens': 4096,
-          }),
-        )
-        .timeout(const Duration(seconds: 60));
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      String content = data['choices'][0]['message']['content'].toString().trim();
-      if (content.startsWith('```')) {
-        final lines = content.split('\n');
-        final stripped = lines.skip(1).toList();
-        if (stripped.isNotEmpty && stripped.last.startsWith('```')) stripped.removeLast();
-        content = stripped.join('\n').trim();
-      }
-      return content;
-    }
-    if (response.statusCode == 401) throw Exception('Invalid OpenRouter API Key. Please check Settings.');
-    if (response.statusCode == 429) throw Exception('OpenRouter quota reached. Try switching model.');
-    throw Exception('OpenRouter LLM error (${response.statusCode}): ${response.body}');
-  }
-
-  /// Re-polish raw transcript via OpenRouter (for the ✨ Try Again button).
-  Future<String> rePolishDirect(String rawTranscript, String apiKey, String llmModel) async {
-    return _callOpenRouterLLM(rawTranscript, apiKey, llmModel);
-  }
-
-  /// Re-polish raw transcript via NVIDIA (fallback for ✨ Try Again).
-  Future<String> rePolishNVIDIA(String rawTranscript, String apiKey) async {
-    return _callNVIDIALLM(rawTranscript, apiKey);
-  }
-
-  Future<String> _callNVIDIALLM(String transcript, String apiKey, {String? systemPrompt}) async {
-    return _callNVIDIALLMWithModel(transcript, apiKey, null, systemPrompt: systemPrompt);
-  }
-
-  Future<String> _callNVIDIALLMWithModel(String transcript, String apiKey, String? overrideModel, {String? systemPrompt}) async {
+  /// The polish prompt, extended with the translation instruction when the user
+  /// enabled translation in Settings.
+  Future<String> _polishPromptWithTranslation() async {
     final prefs = await SharedPreferences.getInstance();
-    if (systemPrompt == null) {
-      bool translate = prefs.getBool('enable_translation') ?? false;
-      String targetedLanguage = prefs.getString('target_language') ?? 'English';
-      systemPrompt = translate
-          ? _polishSystemPrompt + '\n\nAlso, translate the entire cleaned and structured output into $targetedLanguage. Ensure the final note is written completely in $targetedLanguage.'
-          : _polishSystemPrompt;
+    final bool translate = prefs.getBool('enable_translation') ?? false;
+    final String targetedLanguage = prefs.getString('target_language') ?? 'English';
+    return translate
+        ? _polishSystemPrompt + '\n\nAlso, translate the entire cleaned and structured output into $targetedLanguage. Ensure the final note is written completely in $targetedLanguage.'
+        : _polishSystemPrompt;
+  }
+
+  /// Provider-agnostic LLM call.
+  ///
+  /// Every connected provider — built-in or added by the user with "+" — is
+  /// reached through the same OpenAI-compatible `/chat/completions` contract, so
+  /// a newly connected provider starts working without any code change.
+  Future<String> _callProvider(LlmProvider provider, String transcript,
+      {String? systemPrompt, String? modelOverride}) async {
+    final String prompt = systemPrompt ?? await _polishPromptWithTranslation();
+    final String model = (modelOverride ?? provider.model).trim();
+    if (model.isEmpty) {
+      throw Exception('No model selected for ${provider.name}. Please pick one in Settings.');
     }
 
-    final String nvidiaModel = overrideModel ?? prefs.getString('nvidia_model') ?? 'deepseek-ai/deepseek-v4-flash';
-    final url = Uri.parse('$_nvidiaBaseUrl/chat/completions');
+    final url = Uri.parse(provider.chatCompletionsUrl);
+    final Map<String, String> headers = <String, String>{
+      'Authorization': 'Bearer ${provider.apiKey}',
+      'Content-Type': 'application/json',
+    };
+    if (provider.isOpenRouter) {
+      headers['HTTP-Referer'] = 'https://github.com/ullas9525/Dictation_App';
+      headers['X-Title'] = 'Voice Notes App';
+    }
+
     final response = await http
         .post(
           url,
-          headers: {
-            'Authorization': 'Bearer $apiKey',
-            'Content-Type': 'application/json',
-          },
+          headers: headers,
           body: jsonEncode({
-            'model': nvidiaModel,
+            'model': model,
             'messages': [
-              {'role': 'system', 'content': systemPrompt},
+              {'role': 'system', 'content': prompt},
               {'role': 'user', 'content': 'PROCESS THIS TRANSCRIPT:\n\n$transcript'},
             ],
             'temperature': 0.3,
@@ -2459,68 +2923,97 @@ class TranscriptionService {
       }
       return content;
     }
-    if (response.statusCode == 401) throw Exception('Invalid NVIDIA API Key. Please check Settings.');
-    if (response.statusCode == 429) throw Exception('NVIDIA API rate limit reached.');
-    throw Exception('NVIDIA LLM error (${response.statusCode}): ${response.body}');
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      throw Exception('Invalid ${provider.name} API Key. Please check Settings.');
+    }
+    if (response.statusCode == 429) {
+      throw Exception('${provider.name} quota reached. Try another model or provider.');
+    }
+    throw Exception('${provider.name} LLM error (${response.statusCode}): ${response.body}');
   }
 
-  /// Tries the primary LLM provider; on rate-limit (429) silently falls back to the secondary.
+  /// Re-polish (✨ Try Again) with a specific provider + model. When that provider
+  /// is rate-limited, the other connected providers are tried automatically.
+  Future<String> rePolishWithFallback(
+    String rawTranscript, {
+    required String providerId,
+    required String model,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<LlmProvider> all = await ProviderRegistry.load(prefs);
+    final String primaryId = prefs.getString('primary_provider_id') ?? '';
+    final List<LlmProvider> configured =
+        ProviderRegistry.orderedForFallback(all, primaryId)
+            .where((LlmProvider p) => p.isConfigured)
+            .toList();
+
+    if (configured.isEmpty) {
+      throw Exception(
+          'No LLM provider is configured. Connect one (e.g. Gemini) with the + button in Settings.');
+    }
+
+    final LlmProvider chosen = configured.firstWhere(
+      (LlmProvider p) => p.id == providerId,
+      orElse: () => configured.first,
+    );
+    final List<LlmProvider> attempts = <LlmProvider>[
+      chosen,
+      ...configured.where((LlmProvider p) => p.id != chosen.id),
+    ];
+
+    for (final LlmProvider provider in attempts) {
+      try {
+        return await _callProvider(
+          provider,
+          rawTranscript,
+          modelOverride: provider.id == chosen.id ? model : null,
+        );
+      } catch (e) {
+        if (_isRateLimited(e)) continue;
+        rethrow;
+      }
+    }
+    throw Exception(
+        'All LLM providers are rate-limited (${attempts.map((LlmProvider p) => p.name).join(', ')}). Please try again later.');
+  }
+
+  /// True when the error means "this provider cannot serve right now"
+  /// (429 / quota), in which case the next connected provider is used.
+  bool _isRateLimited(Object error) {
+    final String msg = error.toString().toLowerCase();
+    return msg.contains('429') ||
+        msg.contains('rate limit') ||
+        msg.contains('rate-limit') ||
+        msg.contains('quota') ||
+        msg.contains('resource_exhausted');
+  }
+
+  /// Tries the primary provider first, then every other connected provider
+  /// (Gemini, OpenRouter, or anything added later with "+") until one succeeds.
   Future<String> _callLLMWithFallback(String transcript, {String? systemPrompt}) async {
     final prefs = await SharedPreferences.getInstance();
-    final primary = prefs.getString('primary_api') ?? 'openrouter';
-    final openRouterKey = prefs.getString('openrouter_api_key') ?? '';
-    final nvidiaKey = prefs.getString('nvidia_api_key') ?? '';
-    final openRouterModel = prefs.getString('openrouter_model') ?? 'meta-llama/llama-3.2-3b-instruct:free';
+    final List<LlmProvider> all = await ProviderRegistry.load(prefs);
+    final String primaryId = prefs.getString('primary_provider_id') ?? '';
+    final List<LlmProvider> providers =
+        ProviderRegistry.orderedForFallback(all, primaryId)
+            .where((LlmProvider p) => p.isConfigured)
+            .toList();
 
-    bool triedOpenRouter = false;
-    bool triedNvidia = false;
-
-    if (primary == 'openrouter') {
-      triedOpenRouter = true;
-      if (openRouterKey.isNotEmpty) {
-        try {
-          return await _callOpenRouterLLM(transcript, openRouterKey, openRouterModel, systemPrompt: systemPrompt);
-        } catch (e) {
-          final msg = e.toString();
-          if (msg.contains('429') || msg.contains('QUOTA_EXHAUSTED') || msg.contains('rate limit') || msg.contains('quota')) {
-            // rate-limited — fall through to secondary
-          } else {
-            rethrow;
-          }
-        }
-      }
-      triedNvidia = true;
-      if (nvidiaKey.isNotEmpty) {
-        return await _callNVIDIALLM(transcript, nvidiaKey, systemPrompt: systemPrompt);
-      }
-    } else {
-      triedNvidia = true;
-      if (nvidiaKey.isNotEmpty) {
-        try {
-          return await _callNVIDIALLM(transcript, nvidiaKey, systemPrompt: systemPrompt);
-        } catch (e) {
-          final msg = e.toString();
-          if (msg.contains('429') || msg.contains('rate limit') || msg.contains('quota')) {
-            // rate-limited — fall through to secondary
-          } else {
-            rethrow;
-          }
-        }
-      }
-      triedOpenRouter = true;
-      if (openRouterKey.isNotEmpty) {
-        return await _callOpenRouterLLM(transcript, openRouterKey, openRouterModel, systemPrompt: systemPrompt);
-      }
+    if (providers.isEmpty) {
+      throw Exception(
+          'No LLM provider is configured. Connect one (e.g. Gemini) with the + button in Settings.');
     }
 
-    // Build a helpful error message
-    final missing = [];
-    if (triedOpenRouter && openRouterKey.isEmpty) missing.add('OpenRouter');
-    if (triedNvidia && nvidiaKey.isEmpty) missing.add('NVIDIA');
-    if (missing.isNotEmpty) {
-      throw Exception('${missing.join(" and ")} API Key${missing.length > 1 ? "s are" : " is"} not set. Please add it in Settings.');
+    for (final LlmProvider provider in providers) {
+      try {
+        return await _callProvider(provider, transcript, systemPrompt: systemPrompt);
+      } catch (e) {
+        if (_isRateLimited(e)) continue;
+        rethrow;
+      }
     }
-    throw Exception('Both LLM providers are rate-limited. Please try again later or switch models in Settings.');
+    throw Exception(
+        'All LLM providers are rate-limited (${providers.map((LlmProvider p) => p.name).join(', ')}). Please try again later or switch models in Settings.');
   }
 }
 

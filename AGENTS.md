@@ -19,33 +19,45 @@ flutter test             # 1 test, currently outdated
 - **Audio**: recorded as AAC/M4A (`record` package), sampled at 16kHz mono
 
 ## API services
-| Service | Purpose | Config key | Endpoint |
-|---------|---------|------------|----------|
+| Service | Purpose | Config key(s) | Endpoint |
+|---------|---------|---------------|----------|
 | **Groq** | Speech-to-Text (Whisper) | `groq_api_key`, `groq_stt_model` | `api.groq.com/openai/v1/audio/transcriptions` |
-| **OpenRouter** | LLM Brain (primary) | `openrouter_api_key`, `openrouter_model` | `openrouter.ai/api/v1/chat/completions` |
-| **NVIDIA** | LLM Brain (fallback) | `nvidia_api_key` | `integrate.api.nvidia.com/v1/chat/completions` |
+| **LLM providers** | LLM Brain + fallbacks (registry-driven) | `llm_providers` (JSON), `primary_provider_id` | any OpenAI-compatible `{baseUrl}/chat/completions` |
+
+Built-in defaults: **OpenRouter** (`openrouter.ai/api/v1`) and **Gemini**
+(`generativelanguage.googleapis.com/v1beta/openai`). NVIDIA was removed as the
+hard-coded fallback — it can be re-added (like anything else) as a custom provider.
+
+## Provider registry (provider-independent)
+- `LlmProvider` (`main.dart:339`) — `{id, name, baseUrl, apiKey, model, models}`; `chatCompletionsUrl` normalises the base URL and `isConfigured` gates participation.
+- `ProviderRegistry` (`main.dart:415`) — `load`, `save`, `resolvePrimaryId`, `orderedForFallback`, `flowLabel` + `presets` (chips in the connect sheet).
+- SharedPreferences: `llm_providers` (JSON list, **API keys included**) and `primary_provider_id`.
+- First launch after the upgrade migrates `openrouter_api_key` / `openrouter_model` (and a legacy `gemini_api_key`) into the registry, then removes `nvidia_api_key`, `nvidia_model`, `primary_api`.
+- **"+" button** (next to the Gemini card, the section title, and each provider card) opens `_showProviderSheet` → preset chip or free-form name/base URL/key/model(s) → `_upsertProvider` → persisted → instantly used for polishing and as a fallback. No code change needed for a new provider.
+- The ✨ Try-Again sheet and the `TranscribePage` error screen both build their provider/model pickers from the registry (`_loadRetryOptions`), and the retry applies the selected model to its provider before re-running.
 
 ## Key classes
 
 | Class | File:line | Role |
 |-------|-----------|------|
-| `TranscriptionService` | `main.dart:2124` | 3 API calls (`_callWhisper`, `_callOpenRouterLLM`, `_callNVIDIALLM`) + `_callLLMWithFallback()` |
+| `LlmProvider` / `ProviderRegistry` | `main.dart:339` / `415` | Provider model + SharedPreferences-backed registry |
+| `TranscriptionService` | `main.dart:2783` | `_callWhisper` + provider-agnostic `_callProvider` + `_callLLMWithFallback` + `rePolishWithFallback` |
 | `RecordingProvider` | `main.dart:123` | Audio recording lifecycle |
 | `NoteProvider` | `main.dart:56` | Raw/cleaned/polished transcript + translation state |
-| `TranscribePage` | `main.dart:1450` | Processing screen with stepper |
-| `SettingsPage` | `main.dart:1708` | Groq, OpenRouter, NVIDIA config + Primary API selector + translation + theme |
-| `NotePage` | `main.dart:1024` | Tab view (Raw / Cleaned / Polished) with edit/copy/✨ re-polish |
+| `TranscribePage` | `main.dart:1781` | Processing screen with stepper |
+| `SettingsPage` | `main.dart:2066` | Groq config + provider registry UI (+ / edit / delete / set primary) + translation + theme + clipboard |
+| `NotePage` | `main.dart:1311` | Tab view (Raw / Cleaned / Polished) with edit/copy/✨ re-polish |
 
 ## Default models
 - **STT (Groq)**: `whisper-large-v3` (alt: `whisper-large-v3-turbo`)
-- **LLM Brain (OpenRouter)**: `meta-llama/llama-3.2-3b-instruct:free` (24 free models hardcoded in dropdown)
-- **LLM Fallback (NVIDIA)**: `deepseek-ai/deepseek-v4-flash` (default, 12 models in dropdown)
+- **OpenRouter**: `meta-llama/llama-3.2-3b-instruct:free` (24 free models in `ProviderRegistry.openRouterModels`)
+- **Gemini** (default fallback): `gemini-2.5-flash` (also `gemini-2.5-pro`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`)
 
 ## Fallback flow
-- `_callLLMWithFallback()` reads `primary_api` from SharedPreferences (`'openrouter'` or `'nvidia'`)
-- Tries primary provider first; on 429/rate-limit, silently tries the secondary
+- `_callLLMWithFallback()` loads the registry, puts the primary (`primary_provider_id`) first, then every other connected provider in the order it was added
+- Providers without a key are skipped; on 429/quota (`_isRateLimited`) it moves to the next provider; any other error is rethrown
 - Used by `processNote()`, `clean()`, and `polish()` (the main transcription flow)
-- `✨` Re-polish also falls back to NVIDIA if the selected OpenRouter model rate-limits
+- `✨` Re-polish uses `rePolishWithFallback(providerId:, model:)` — it prefers the provider + model chosen in the sheet, then falls back through the remaining providers
 
 ## Gotchas
 
@@ -55,11 +67,12 @@ flutter test             # 1 test, currently outdated
 - **`.gitignore`** excludes AI tracking files (`changes.md`, `score.md`, `problemstatement.md`, `Muddu_Dictation_AI_Technical_Documentation.md`)
 - **Existing instructions**: `.github/copilot-instructions.md` (graphify-first lookup), `.agents/rules/graphify.md` (same), `.agents/workflows/` (explain/graphify/understand)
 - **`cleanedTranscript`** — now a separate LLM clean call (no longer `== rawTranscript`)
-- **Three separate API keys possible**: Groq (STT) + OpenRouter + NVIDIA (LLM brain with fallback)
+- **API keys** — one Groq key (STT) plus one key per connected LLM provider; all stored as plain text in `SharedPreferences`
+- **Legacy keys removed on migration**: `nvidia_api_key`, `nvidia_model`, `primary_api` (the registry replaces them)
 
 ## Translation feature
 - Toggle + language picker in Settings persist to `SharedPreferences`
-- A single prompt extension appends translation instruction to the OpenRouter LLM call (no separate API call)
+- A single prompt extension appends the translation instruction to the polish prompt of whichever provider serves the request (no separate API call)
 - Supported languages: English, Hindi, Kannada, Telugu, Tamil, Malayalam, Marathi, Bengali
 
 ## Auto-Copy to Clipboard

@@ -35,7 +35,8 @@ Because professionals, students, and creators are always on the go. Voice notes 
 ## ✨ Features
 - 🎙 **Instant Recording**: Minimalist UI with waveform visualizer and immediate startup.
 - 🧠 **AI Brain Animation**: Premium high-end feedback during processing.
-- 🔑 **Secure API Key Storage**: Your Groq key stays safe on your device.
+- 🔌 **Bring Your Own Provider**: OpenRouter and Gemini are preconfigured — tap **+** in Settings to connect any OpenAI-compatible provider (Groq, OpenAI, Mistral, a local server…) and it is used immediately, with automatic fallback on rate limits.
+- 🔑 **On-Device API Keys**: Keys stay on your device.
 - 📊 **Staged Progress**: Real-time tracking through **Uploading → Processing → Downloading**.
 - 📝 **Triple View Tabs**:
   - **Raw Transcript**: Your exact spoken words.
@@ -48,7 +49,9 @@ Because professionals, students, and creators are always on the go. Voice notes 
 ## 📦 Tech Stack
 - **Flutter** (cross-platform mobile)
 - **Framework**: Flutter (Material 3)
-- **AI Infrastructure**: Groq Cloud (LPU Inference)
+- **Speech-to-Text**: Groq Cloud (LPU Inference, Whisper)
+- **LLM Brain**: provider-independent registry — OpenRouter and Gemini built in, plus any
+  OpenAI-compatible `/chat/completions` endpoint you connect with the **+** button
 - **State Management**: Provider
 - **Persistence**: SharedPreferences
 - **Markdown Rendering**: Flutter Markdown
@@ -65,9 +68,9 @@ Because professionals, students, and creators are always on the go. Voice notes 
    ```bash
    flutter pub get
    ```
-3. **Groq API Key**:
-   - Get your key at [console.groq.com](https://console.groq.com).
-   - Open the app → **Settings** → Paste your **Groq API Key**.
+3. **API Keys** (configured in-app):
+   - **Groq** key from [console.groq.com](https://console.groq.com) → **Settings → Groq API Key** (speech-to-text).
+   - **LLM Brain**: an **OpenRouter** and a **Gemini** card are preconfigured — paste a key into either, or tap **+** to connect any provider you like.
 4. **Run**:
    ```bash
    flutter run --release
@@ -76,14 +79,17 @@ Because professionals, students, and creators are always on the go. Voice notes 
 ---
 
 ## 🔐 API Key Setup
-1. Get your **Groq API Key** from [console.groq.com](https://console.groq.com/).
-2. Enter it in the app under **Settings** → **API Settings**.
-3. It stays **securely on your device**.
+1. **Speech-to-Text (required)**: get a Groq key at [console.groq.com](https://console.groq.com/) and paste it under **Settings → Groq API Key**.
+2. **LLM Brain (at least one required)**: paste a key into the **OpenRouter** or **Gemini** card, or press the **+** button next to a provider to connect another one:
+   - Presets: **Gemini**, **OpenRouter**, **Groq**, **OpenAI**, **Mistral** — or **Custom** for any OpenAI-compatible `/chat/completions` endpoint (just give it a name, base URL, key and model).
+   - Mark the provider you want tried first with ★ (**Set as primary**). Every other connected provider is then used automatically if the primary hits a rate limit.
+3. Tap **💾** to save. Keys are stored **only on your device**.
 
 ---
 
 ## 🛠 Roadmap
-- [ ] Multi-language transcription
+- [x] Multi-language transcription (8 target languages via the polish prompt)
+- [ ] Provider-specific model auto-discovery (fetch `/models` from a connected provider)
 
 ---
 
