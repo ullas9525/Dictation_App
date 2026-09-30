@@ -458,6 +458,26 @@ class ProviderRegistry {
     'gemini-2.0-flash',
   ];
 
+  /// Parses the comma separated model list the provider sheet stores
+  /// (`LlmProvider.models` rendered as text), keeping the order and dropping
+  /// blanks — the model dropdown offers exactly these entries.
+  static List<String> parseModelList(String raw) => raw
+      .split(',')
+      .map((String m) => m.trim())
+      .where((String m) => m.isNotEmpty)
+      .toList();
+
+  /// The models shown by the model dropdown: the provider's list (comma
+  /// separated text), guaranteed to contain the currently selected (default)
+  /// model so the dropdown can display it even when the list was edited down.
+  static List<String> modelChoices(String rawModels, String selected) {
+    final List<String> choices = parseModelList(rawModels);
+    if (selected.isNotEmpty && !choices.contains(selected)) {
+      choices.insert(0, selected);
+    }
+    return choices;
+  }
+
   /// Chips offered inside the "Connect a provider" sheet. "Custom" lets the user
   /// point the app at any other OpenAI-compatible endpoint.
   static const List<ProviderPreset> presets = <ProviderPreset>[
@@ -2199,6 +2219,10 @@ class _SettingsPageState extends State<SettingsPage> {
   String _groqApiKey = '';
   String _selectedSttModel = 'whisper-large-v3';
 
+  /// Owned by the state so an auto-save rebuild never rebuilds the text field's
+  /// controller (which would throw the caret around while a key is typed).
+  final TextEditingController _groqKeyController = TextEditingController();
+
   // --- LLM PROVIDER REGISTRY (provider-independent) ---
   /// Every connected "brain". Seeded with OpenRouter + Gemini, and extendable at
   /// runtime through the "+" button that sits next to a provider card.
@@ -2207,6 +2231,12 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _providersLoaded = false;
   bool _refreshingFreeOpenRouterModels = false;
   int? _openRouterModelsRefreshedAtMs;
+
+  // --- AUTO-SAVE (Settings) ---
+  /// Every change is persisted shortly after it is made, so the old
+  /// manual "save" button is no longer needed. Saving is silent: nothing is
+  /// shown in the app bar for it.
+  Timer? _autoSaveTimer;
 
   // --- TRANSLATION VARIABLES ---
   bool _enableTranslation = false;
@@ -2244,6 +2274,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) {
       setState(() {
         _groqApiKey = prefs.getString('groq_api_key') ?? '';
+        _groqKeyController.text = _groqApiKey;
         _selectedSttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
         _providers = providers;
         _primaryProviderId = ProviderRegistry.resolvePrimaryId(
@@ -2262,7 +2293,19 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  Future<void> _saveSettings() async {
+  /// Persists everything a moment after a change is made (debounced so typing a
+  /// key does not trigger a write per character).
+  void _scheduleAutoSave() {
+    if (!mounted) return;
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer(const Duration(milliseconds: 300), () async {
+      if (!mounted) return;
+      await _persistAllSettings();
+    });
+  }
+
+  /// Writes the current state without any confirmation dialog or snackbar.
+  Future<void> _persistAllSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('groq_api_key', _groqApiKey);
     await prefs.setString('groq_stt_model', _selectedSttModel);
@@ -2271,17 +2314,16 @@ class _SettingsPageState extends State<SettingsPage> {
     await prefs.setString('target_language', _selectedTargetLanguage);
     await prefs.setBool('auto_copy_enabled', _autoCopyEnabled);
     await prefs.setString('auto_copy_target', _autoCopyTarget);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Settings saved! ✅')),
-      );
-    }
   }
-
-
 
   @override
   void dispose() {
+    // Nothing is lost when the screen closes: a change that had not been
+    // written yet is flushed immediately.
+    final bool pending = _autoSaveTimer?.isActive ?? false;
+    _autoSaveTimer?.cancel();
+    if (pending) _persistAllSettings();
+    _groqKeyController.dispose();
     super.dispose();
   }
 
@@ -2294,16 +2336,6 @@ class _SettingsPageState extends State<SettingsPage> {
       appBar: AppBar(
         title: const Text('Settings'),
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.save),
-            onPressed: () {
-              _saveSettings();
-              FocusScope.of(context).unfocus();
-            },
-            tooltip: 'Save Settings',
-          ),
-        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16.0),
@@ -2327,9 +2359,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     border: InputBorder.none,
                     isDense: true,
                   ),
-                  onChanged: (value) => _groqApiKey = value,
-                  controller: TextEditingController(text: _groqApiKey)
-                    ..selection = TextSelection.collapsed(offset: _groqApiKey.length),
+                  onChanged: (value) {
+                    _groqApiKey = value;
+                    _scheduleAutoSave();
+                  },
+                  controller: _groqKeyController,
                 ),
                 const Divider(height: 16),
                 DropdownButtonFormField<String>(
@@ -2341,7 +2375,11 @@ class _SettingsPageState extends State<SettingsPage> {
                   items: _groqSttModels
                       .map((m) => DropdownMenuItem(value: m, child: Text(m)))
                       .toList(),
-                  onChanged: (v) => setState(() => _selectedSttModel = v!),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => _selectedSttModel = v);
+                    _scheduleAutoSave();
+                  },
                 ),
               ],
             ),
@@ -2461,6 +2499,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     setState(() {
                       _enableTranslation = value;
                     });
+                    _scheduleAutoSave();
                   },
                 ),
                 if (_enableTranslation)
@@ -2470,7 +2509,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     items: _targetLanguages
                         .map((lang) => DropdownMenuItem(value: lang, child: Text(lang)))
                         .toList(),
-                    onChanged: (v) => setState(() => _selectedTargetLanguage = v!),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _selectedTargetLanguage = v);
+                      _scheduleAutoSave();
+                    },
                   ),
               ],
             ),
@@ -2514,6 +2557,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: _autoCopyEnabled,
                   onChanged: (bool value) {
                     setState(() => _autoCopyEnabled = value);
+                    _scheduleAutoSave();
                   },
                 ),
                 if (_autoCopyEnabled)
@@ -2524,7 +2568,11 @@ class _SettingsPageState extends State<SettingsPage> {
                       DropdownMenuItem(value: 'clean', child: Text('Clean Note')),
                       DropdownMenuItem(value: 'polished', child: Text('Polish Note')),
                     ],
-                    onChanged: (v) => setState(() => _autoCopyTarget = v!),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _autoCopyTarget = v);
+                      _scheduleAutoSave();
+                    },
                   ),
               ],
             ),
@@ -2889,11 +2937,21 @@ class _SettingsPageState extends State<SettingsPage> {
         TextEditingController(text: existing?.name ?? defaultPreset.name);
     final TextEditingController urlController =
         TextEditingController(text: existing?.baseUrl ?? defaultPreset.baseUrl);
-    final TextEditingController modelController = TextEditingController(
-        text: existing?.model ??
-            (defaultPreset.models.isNotEmpty ? defaultPreset.models.first : ''));
+    // The pickable models live in a controller so the picker can be a dropdown;
+    // `selectedModel` is the default model shown while the dropdown is closed.
+    final List<String> initialModels = (existing?.models ?? defaultPreset.models)
+        .where((String m) => m.trim().isNotEmpty)
+        .toList();
+    // A provider with no model list yet (a hand-typed custom one) has nothing to
+    // pick from, so that single model is typed once instead.
+    final bool needsCustomModel = initialModels.isEmpty;
     final TextEditingController modelsController = TextEditingController(
-        text: (existing?.models ?? defaultPreset.models).join(', '));
+        text: needsCustomModel ? (existing?.model ?? '') : initialModels.join(', '));
+    String selectedModel = existing?.model ??
+        (initialModels.isNotEmpty ? initialModels.first : '');
+    // The full model list stays out of the initial view — it is revealed with
+    // the "Edit models" action.
+    bool showModelsEditor = false;
     String selectedPreset = existing?.name ?? defaultPreset.name;
     String? error;
 
@@ -2905,6 +2963,31 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
+            final List<String> availableModels =
+                ProviderRegistry.modelChoices(modelsController.text, selectedModel);
+            if (selectedModel.isEmpty && availableModels.isNotEmpty) {
+              selectedModel = availableModels.first;
+            }
+
+            /// Edit mode saves every valid change as it is made — no save button.
+            void autoApply() {
+              if (isNew) return;
+              final String name = nameController.text.trim();
+              final String url = urlController.text.trim();
+              if (name.isEmpty || !url.startsWith('http') || selectedModel.isEmpty) {
+                return;
+              }
+              _upsertProvider(
+                existing: existing,
+                name: name,
+                baseUrl: url,
+                model: selectedModel,
+                models: ProviderRegistry.modelChoices(
+                    modelsController.text, selectedModel),
+                silent: true,
+              );
+            }
+
             return Padding(
               padding: EdgeInsets.only(
                 left: 20,
@@ -2942,7 +3025,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                       nameController.text = preset.name;
                                       urlController.text = preset.baseUrl;
                                       modelsController.text = preset.models.join(', ');
-                                      modelController.text = preset.models.isNotEmpty
+                                      selectedModel = preset.models.isNotEmpty
                                           ? preset.models.first
                                           : '';
                                       error = null;
@@ -3009,6 +3092,10 @@ class _SettingsPageState extends State<SettingsPage> {
                     ],
                     TextField(
                       controller: nameController,
+                      onChanged: (String _) {
+                        setSheetState(() {});
+                        autoApply();
+                      },
                       decoration: const InputDecoration(
                         labelText: 'Provider name',
                         border: OutlineInputBorder(),
@@ -3018,6 +3105,10 @@ class _SettingsPageState extends State<SettingsPage> {
                     TextField(
                       controller: urlController,
                       keyboardType: TextInputType.url,
+                      onChanged: (String _) {
+                        setSheetState(() {});
+                        autoApply();
+                      },
                       decoration: const InputDecoration(
                         labelText: 'Base URL',
                         hintText: 'https://api.example.com/v1',
@@ -3025,22 +3116,95 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    TextField(
-                      controller: modelController,
-                      decoration: const InputDecoration(
-                        labelText: 'Default model',
-                        hintText: 'e.g. gemini-2.5-flash',
-                        border: OutlineInputBorder(),
+                    if (needsCustomModel)
+                      // Nothing to pick from yet — type the model once.
+                      TextField(
+                        controller: modelsController,
+                        onChanged: (String v) {
+                          final List<String> parsed = _parseModelList(v);
+                          setSheetState(() {
+                            if (parsed.isNotEmpty) selectedModel = parsed.first;
+                            error = null;
+                          });
+                          autoApply();
+                        },
+                        decoration: const InputDecoration(
+                          labelText: 'Model',
+                          hintText: 'e.g. gemini-2.5-flash',
+                          border: OutlineInputBorder(),
+                        ),
+                      )
+                    else ...[
+                      // Closed it shows only the default model; tap to expand
+                      // the full list of models this provider offers.
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Default model',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: selectedModel,
+                            isExpanded: true,
+                            items: availableModels
+                                .map((String m) => DropdownMenuItem<String>(
+                                      value: m,
+                                      child: Text(m,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 14)),
+                                    ))
+                                .toList(),
+                            onChanged: (String? v) {
+                              if (v == null) return;
+                              setSheetState(() {
+                                selectedModel = v;
+                                error = null;
+                              });
+                              autoApply();
+                            },
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: modelsController,
-                      decoration: const InputDecoration(
-                        labelText: 'More models (comma separated, optional)',
-                        border: OutlineInputBorder(),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () => setSheetState(
+                              () => showModelsEditor = !showModelsEditor),
+                          icon: const Icon(Icons.edit_outlined, size: 16),
+                          label: Text(showModelsEditor
+                              ? 'Hide model list'
+                              : 'Edit models (${availableModels.length} available)'),
+                        ),
                       ),
-                    ),
+                      if (showModelsEditor) ...[
+                        const SizedBox(height: 4),
+                        TextField(
+                          controller: modelsController,
+                          onChanged: (String v) {
+                            final List<String> parsed = _parseModelList(v);
+                            setSheetState(() {
+                              if (parsed.isNotEmpty && !parsed.contains(selectedModel)) {
+                                selectedModel = parsed.first;
+                              }
+                              error = null;
+                            });
+                            autoApply();
+                          },
+                          decoration: const InputDecoration(
+                            labelText: 'Available models (comma separated)',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ],
+                    ],
+                    if (!isNew) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        'Changes are saved automatically — no need to press save.',
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.grey.shade600),
+                      ),
+                    ],
                     if (error != null) ...[
                       const SizedBox(height: 12),
                       Text(error!, style: const TextStyle(color: Colors.red)),
@@ -3050,15 +3214,14 @@ class _SettingsPageState extends State<SettingsPage> {
                       width: double.infinity,
                       child: ElevatedButton.icon(
                         icon: const Icon(Icons.check),
-                        label:
-                            Text(isNew ? 'Connect provider' : 'Save provider'),
+                        label: Text(isNew ? 'Connect provider' : 'Done'),
                         style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.red,
                             foregroundColor: Colors.white),
                         onPressed: () async {
                           final String name = nameController.text.trim();
                           final String url = urlController.text.trim();
-                          final String model = modelController.text.trim();
+                          final String model = selectedModel.trim();
                           if (name.isEmpty) {
                             setSheetState(
                                 () => error = 'Please enter a provider name.');
@@ -3074,21 +3237,24 @@ class _SettingsPageState extends State<SettingsPage> {
                                 () => error = 'Please enter a model name.');
                             return;
                           }
-                          final List<String> models = modelsController.text
-                              .split(',')
-                              .map((String m) => m.trim())
-                              .where((String m) => m.isNotEmpty)
-                              .toList();
+                          final List<String> models =
+                              List<String>.from(availableModels);
                           if (!models.contains(model)) models.insert(0, model);
+                          if (!isNew) {
+                            // Everything already persisted as it was typed;
+                            // flush once more and close.
+                            autoApply();
+                            Navigator.pop(ctx);
+                            return;
+                          }
                           Navigator.pop(ctx);
                           final LlmProvider? saved = await _upsertProvider(
-                            existing: existing,
                             name: name,
                             baseUrl: url,
                             model: model,
                             models: models,
                           );
-                          if (isNew && saved != null && !saved.isConfigured) {
+                          if (saved != null && !saved.isConfigured) {
                             // A provider created without a key is asked once,
                             // right after it is created.
                             await _openProvider(saved);
@@ -3145,11 +3311,19 @@ class _SettingsPageState extends State<SettingsPage> {
         );
       },
     );
+    nameController.dispose();
+    urlController.dispose();
+    modelsController.dispose();
   }
+
+  /// Parses a comma separated model list, keeping the order and dropping blanks.
+  List<String> _parseModelList(String raw) =>
+      ProviderRegistry.parseModelList(raw);
 
   /// Persists a newly connected provider (or the edits of an existing one).
   /// Keys are never edited here: pass `apiKey: null` to leave a stored key
   /// untouched, or a new value to replace it when a dialog has collected one.
+  /// `silent` skips the confirmation snackbar (used by the sheet's auto-save).
   Future<LlmProvider?> _upsertProvider({
     LlmProvider? existing,
     required String name,
@@ -3157,7 +3331,18 @@ class _SettingsPageState extends State<SettingsPage> {
     required String model,
     required List<String> models,
     String? apiKey,
+    bool silent = false,
   }) async {
+    // Auto-save fires on every edit; a write that changes nothing is skipped so
+    // the list is not rebuilt (and the open sheet not disturbed) for nothing.
+    if (existing != null &&
+        existing.name == name &&
+        existing.baseUrl == baseUrl &&
+        existing.model == model &&
+        existing.apiKey == (apiKey ?? existing.apiKey) &&
+        existing.models.join(',') == models.join(',')) {
+      return existing;
+    }
     LlmProvider? result;
     setState(() {
       if (existing != null) {
@@ -3184,7 +3369,7 @@ class _SettingsPageState extends State<SettingsPage> {
       }
     });
     await _persistProviders();
-    if (mounted) {
+    if (!silent && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('$name saved ✅')),
       );

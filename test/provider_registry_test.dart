@@ -195,4 +195,32 @@ void main() {
       'Gemini (gemini-2.5-flash): quota exceeded',
     );
   });
+
+  group('model dropdown (the provider sheet picker)', () {
+    test('a comma separated list becomes the pickable models, blanks dropped',
+        () {
+      expect(
+        ProviderRegistry.parseModelList(' gemini-2.5-flash , gemini-2.5-pro ,, '),
+        <String>['gemini-2.5-flash', 'gemini-2.5-pro'],
+      );
+      expect(ProviderRegistry.parseModelList(''), isEmpty);
+      expect(ProviderRegistry.parseModelList('single-model'),
+          <String>['single-model']);
+    });
+
+    test('the selected default model is always offered, first when unlisted', () {
+      expect(
+        ProviderRegistry.modelChoices('a-model, b-model', 'b-model'),
+        <String>['a-model', 'b-model'],
+      );
+      expect(
+        ProviderRegistry.modelChoices('a-model, b-model', 'typed-model'),
+        <String>['typed-model', 'a-model', 'b-model'],
+      );
+      // An edited-down list can never leave the dropdown without a selection.
+      expect(ProviderRegistry.modelChoices('', 'b-model'), <String>['b-model']);
+      expect(ProviderRegistry.modelChoices('a-model', ''), <String>['a-model']);
+    });
+  });
+
 }
