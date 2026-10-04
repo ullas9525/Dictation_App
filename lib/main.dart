@@ -64,9 +64,26 @@ class NoteProvider with ChangeNotifier {
   String _cleanedTranscriptTranslated = '';
   String _polishedTranscriptTranslated = '';
 
+  // --- NEW: which "brain" (provider + model) produced each tab ---
+  String _rawProviderName = '';
+  String _rawModel = '';
+  String _cleanedProviderName = '';
+  String _cleanedModel = '';
+  String _polishedProviderName = '';
+  String _polishedModel = '';
+
   String get rawTranscript => _rawTranscript;
   String get cleanedTranscript => _cleanedTranscript;
   String get polishedTranscript => _polishedTranscript;
+
+  /// Provider + model that produced each tab, e.g. "Groq" /
+  /// "whisper-large-v3". Empty until a note has been processed.
+  String get rawProviderName => _rawProviderName;
+  String get rawModel => _rawModel;
+  String get cleanedProviderName => _cleanedProviderName;
+  String get cleanedModel => _cleanedModel;
+  String get polishedProviderName => _polishedProviderName;
+  String get polishedModel => _polishedModel;
 
   // --- NEW: Getters for Translated Texts ---
   String get rawTranscriptTranslated => _rawTranscriptTranslated;
@@ -90,8 +107,10 @@ class NoteProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  void updatePolishedNote(String newNote) {
+  void updatePolishedNote(String newNote, {String? providerName, String? model}) {
     _polishedTranscript = newNote;
+    if (providerName != null) _polishedProviderName = providerName;
+    if (model != null) _polishedModel = model;
     notifyListeners();
   }
 
@@ -110,6 +129,14 @@ class NoteProvider with ChangeNotifier {
     _rawTranscript = transcripts['rawTranscript'] ?? 'No raw transcript available.';
     _cleanedTranscript = transcripts['cleanedTranscript'] ?? 'No cleaned transcript available.';
     _polishedTranscript = transcripts['polishedNote'] ?? 'No polished note available.';
+
+    // --- NEW: which provider + model produced each tab ---
+    _rawProviderName = transcripts['rawProvider'] ?? '';
+    _rawModel = transcripts['rawModel'] ?? '';
+    _cleanedProviderName = transcripts['cleanedProvider'] ?? '';
+    _cleanedModel = transcripts['cleanedModel'] ?? '';
+    _polishedProviderName = transcripts['polishedProvider'] ?? '';
+    _polishedModel = transcripts['polishedModel'] ?? '';
 
     // --- NEW: Update translated transcripts IF they exist in the map ---
     _rawTranscriptTranslated = transcripts['raw_translated'] ?? '';
@@ -1520,6 +1547,8 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                   ),
                 ),
                 const SizedBox(height: 12),
+                // --- Which brain (provider + model) produced this tab ---
+                _buildProviderInfo(noteProvider),
                 // --- Bottom Action Bar: Copy + Edit/Save ---
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16.0),
@@ -1716,12 +1745,13 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
     provider.setPolishing(true);
     try {
       final service = TranscriptionService();
-      final String newNote = await service.rePolishWithFallback(
+      final ProviderResult result = await service.rePolishWithFallback(
         provider.rawTranscript,
         providerId: target.id,
         model: model,
       );
-      provider.updatePolishedNote(newNote);
+      provider.updatePolishedNote(result.content,
+          providerName: result.providerName, model: result.model);
       _lastPolished = '';
       if (mounted) {
         setState(() { _showTranslated = false; _isEditing = false; });
@@ -1742,6 +1772,64 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
   }
 
 
+
+  /// Shows which provider + model produced the note on the currently selected
+  /// tab, right above the Copy / Edit buttons. Renders nothing until a note has
+  /// been processed (so a "no speech" result shows no blank label).
+  Widget _buildProviderInfo(NoteProvider provider) {
+    final int tab = _tabController.index;
+    final String providerName = tab == 0
+        ? provider.rawProviderName
+        : tab == 1
+            ? provider.cleanedProviderName
+            : provider.polishedProviderName;
+    final String model = tab == 0
+        ? provider.rawModel
+        : tab == 1
+            ? provider.cleanedModel
+            : provider.polishedModel;
+    if (providerName.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade400, width: 1),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.memory, size: 16, color: Colors.grey.shade600),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Provider: $providerName',
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                if (model.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      'Model: $model',
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildCopyButton(BuildContext context, String label, String text, {bool isMarkdown = false}) {
     return ElevatedButton.icon(
@@ -1867,8 +1955,8 @@ class _TranscribePageState extends State<TranscribePage> {
   // Results of stages that already succeeded. Groq transcription is never
   // repeated: once the audio has been transcribed, a retry only re-runs the
   // LLM stage against a different provider/model.
-  String? _rawTranscript;
-  String? _cleanedTranscript;
+  ProviderResult? _sttResult;
+  ProviderResult? _cleanedResult;
 
   @override
   void initState() {
@@ -1881,7 +1969,7 @@ class _TranscribePageState extends State<TranscribePage> {
     setState(() {
       _isProcessing = true;
       _errorMessage = '';
-      _currentStep = _rawTranscript == null
+      _currentStep = _sttResult == null
           ? ProcessingStep.uploading
           : ProcessingStep.processing;
     });
@@ -1890,18 +1978,20 @@ class _TranscribePageState extends State<TranscribePage> {
       final service = TranscriptionService();
 
       // Stage 1: Whisper STT — skipped when the audio was already transcribed.
-      final String rawTranscript = _rawTranscript ?? await service.transcribe(widget.audioPath);
-      _rawTranscript = rawTranscript;
+      final ProviderResult sttResult =
+          _sttResult ?? await service.transcribe(widget.audioPath);
+      _sttResult = sttResult;
+      final String rawTranscript = sttResult.content;
 
       // Stage 2: LLM Clean — skipped when it already succeeded.
       if (!mounted) return;
       setState(() => _currentStep = ProcessingStep.processing);
-      final String cleanedTranscript =
-          _cleanedTranscript ?? await service.clean(rawTranscript);
-      _cleanedTranscript = cleanedTranscript;
+      final ProviderResult cleanedResult =
+          _cleanedResult ?? await service.clean(rawTranscript);
+      _cleanedResult = cleanedResult;
 
       // Stage 3: LLM Polish — shown as "Processing" (continues)
-      final polishedNote = await service.polish(rawTranscript);
+      final ProviderResult polishedResult = await service.polish(rawTranscript);
 
       // Stage 4: Done — shown as "Downloading" briefly
       if (!mounted) return;
@@ -1911,8 +2001,14 @@ class _TranscribePageState extends State<TranscribePage> {
       if (mounted) {
         Navigator.of(context).pop(<String, String>{
           'rawTranscript': rawTranscript,
-          'cleanedTranscript': cleanedTranscript,
-          'polishedNote': polishedNote,
+          'rawProvider': sttResult.providerName,
+          'rawModel': sttResult.model,
+          'cleanedTranscript': cleanedResult.content,
+          'cleanedProvider': cleanedResult.providerName,
+          'cleanedModel': cleanedResult.model,
+          'polishedNote': polishedResult.content,
+          'polishedProvider': polishedResult.providerName,
+          'polishedModel': polishedResult.model,
         });
       }
     } catch (e) {
@@ -2003,7 +2099,7 @@ class _TranscribePageState extends State<TranscribePage> {
                       const Text('Processing Failed', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 12),
                       Text(
-                        _rawTranscript == null
+                        _sttResult == null
                             ? _errorMessage
                             : _errorMessage.contains('QUOTA_EXHAUSTED')
                                 ? 'Quota exhausted for this AI model. Please switch the model.'
@@ -2025,7 +2121,7 @@ class _TranscribePageState extends State<TranscribePage> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                _rawTranscript == null
+                                _sttResult == null
                                     ? 'Groq still needs to transcribe the audio — Retry will send it to Groq again.'
                                     : 'Audio already transcribed by Groq — Retry skips Groq and only re-runs the AI note step.',
                                 style: TextStyle(
@@ -2037,7 +2133,7 @@ class _TranscribePageState extends State<TranscribePage> {
                         ),
                       ),
                       const SizedBox(height: 20),
-                      if (_rawTranscript == null)
+                      if (_sttResult == null)
                         const Text(
                           'Speech-to-text failed, so there is nothing to polish yet. '
                           'Check your Groq API key in Settings, then Retry.',
@@ -2082,7 +2178,7 @@ class _TranscribePageState extends State<TranscribePage> {
                           ElevatedButton(
                             onPressed: _retryWithSelectedModel,
                             style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                            child: Text(_rawTranscript == null
+                            child: Text(_sttResult == null
                                 ? 'Retry transcription'
                                 : 'Retry with this brain'),
                           ),
@@ -3380,6 +3476,28 @@ class _SettingsPageState extends State<SettingsPage> {
 
 // --- Services ---
 
+/// A piece of text together with the provider + model that produced it, so the
+/// Note screen can show which "brain" wrote each tab (Groq for the raw
+/// transcript, an LLM provider for the cleaned / polished note).
+class ProviderResult {
+  final String content;
+  final String providerName; // e.g. "Groq", "OpenRouter", "Gemini"
+  final String model;        // e.g. "whisper-large-v3", "meta-llama/...:free"
+
+  const ProviderResult({
+    required this.content,
+    this.providerName = '',
+    this.model = '',
+  });
+
+  /// True once a provider is known — a "no speech" early return leaves it empty
+  /// so the UI can hide the label instead of showing a blank provider.
+  bool get hasProvider => providerName.isNotEmpty;
+
+  /// e.g. "OpenRouter · meta-llama/llama-3.2-3b-instruct:free".
+  String get label => model.isEmpty ? providerName : '$providerName · $model';
+}
+
 class TranscriptionService {
   static const String _groqBaseUrl = 'https://api.groq.com/openai/v1';
 
@@ -3424,10 +3542,11 @@ class TranscriptionService {
     }
 
     // Stage 2: LLM Clean (API Call 2) with automatic fallback
-    final cleanedTranscript = await _callLLMWithFallback(rawTranscript, systemPrompt: _cleanSystemPrompt);
+    final cleanedTranscript =
+        (await _callLLMWithFallback(rawTranscript, systemPrompt: _cleanSystemPrompt)).content;
 
     // Stage 3: LLM Polish (API Call 3) with automatic fallback
-    final polishedNote = await _callLLMWithFallback(rawTranscript);
+    final polishedNote = (await _callLLMWithFallback(rawTranscript)).content;
 
     return {
       'rawTranscript': rawTranscript,
@@ -3437,23 +3556,29 @@ class TranscriptionService {
   }
 
   /// Stage 1 (public): Transcribe audio using Groq Whisper.
-  Future<String> transcribe(String audioPath) async {
+  Future<ProviderResult> transcribe(String audioPath) async {
     final prefs = await SharedPreferences.getInstance();
     final apiKey = prefs.getString('groq_api_key') ?? '';
     final sttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
     if (apiKey.isEmpty) throw Exception('Groq API Key is not set. Please add it in Settings.');
-    return _callWhisper(audioPath, apiKey, sttModel);
+    final String text = await _callWhisper(audioPath, apiKey, sttModel);
+    return ProviderResult(content: text, providerName: 'Groq', model: sttModel);
   }
 
   /// Stage 2 (public): Clean transcript via LLM — remove fillers, fix grammar.
-  Future<String> clean(String rawTranscript) async {
-    if (rawTranscript.trim().length < 3) return rawTranscript;
+  Future<ProviderResult> clean(String rawTranscript) async {
+    if (rawTranscript.trim().length < 3) {
+      return ProviderResult(content: rawTranscript);
+    }
     return _callLLMWithFallback(rawTranscript, systemPrompt: _cleanSystemPrompt);
   }
 
   /// Stage 3 (public): Polish transcript with auto-fallback between LLM providers.
-  Future<String> polish(String rawTranscript) async {
-    if (rawTranscript.trim().length < 3) return 'No speech was detected in the recording. Please try again.';
+  Future<ProviderResult> polish(String rawTranscript) async {
+    if (rawTranscript.trim().length < 3) {
+      return const ProviderResult(
+          content: 'No speech was detected in the recording. Please try again.');
+    }
     return _callLLMWithFallback(rawTranscript);
   }
 
@@ -3559,7 +3684,7 @@ class TranscriptionService {
   /// Re-polish (✨ Try Again) with a specific provider + model. When that attempt
   /// fails with a recoverable provider error, the other connected providers
   /// are tried automatically.
-  Future<String> rePolishWithFallback(
+  Future<ProviderResult> rePolishWithFallback(
     String rawTranscript, {
     required String providerId,
     required String model,
@@ -3593,20 +3718,29 @@ class TranscriptionService {
         rawTranscript,
         modelOverride: provider.id == chosen.id ? model : null,
       ),
+      // The chosen provider uses the picked model; any fallback uses its own.
+      modelFor: (LlmProvider provider) =>
+          provider.id == chosen.id ? model : provider.model,
     );
   }
 
   /// Shared fallback loop. Every recoverable provider error moves to the next
   /// provider. Non-recoverable errors stop immediately. When every attempt
   /// fails, all attempts are reported together.
-  Future<String> _runProviderChain(
+  Future<ProviderResult> _runProviderChain(
     List<LlmProvider> attempts,
-    Future<String> Function(LlmProvider provider) call,
-  ) async {
+    Future<String> Function(LlmProvider provider) call, {
+    String Function(LlmProvider provider)? modelFor,
+  }) async {
     final List<String> failures = <String>[];
     for (final LlmProvider provider in attempts) {
       try {
-        return await call(provider);
+        final String content = await call(provider);
+        return ProviderResult(
+          content: content,
+          providerName: provider.name,
+          model: (modelFor ?? (LlmProvider p) => p.model)(provider),
+        );
       } catch (e) {
         // Every failure raised here belongs to one specific provider/model
         // (bad key, retired model, quota, 5xx, timeout, network, …), so the
@@ -3623,7 +3757,8 @@ class TranscriptionService {
 
   /// Tries the primary provider first, then every other connected provider
   /// (Gemini, OpenRouter, or anything added later with "+") until one succeeds.
-  Future<String> _callLLMWithFallback(String transcript, {String? systemPrompt}) async {
+  Future<ProviderResult> _callLLMWithFallback(String transcript,
+      {String? systemPrompt}) async {
     final prefs = await SharedPreferences.getInstance();
     final List<LlmProvider> all = await ProviderRegistry.load(prefs);
     final String primaryId = prefs.getString('primary_provider_id') ?? '';

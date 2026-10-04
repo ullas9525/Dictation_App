@@ -44,7 +44,10 @@ Because professionals, students, and creators are always on the go. Voice notes 
   - **Raw Transcript**: Your exact spoken words.
   - **Cleaned Text**: A readable version of the transcript.
   - **Polished Note**: Professional Markdown with headings (#) and sections (##).
-- 🔄 **Sparkle ✨ Re-polish**: Didn't like the result? Re-process with a different LLM instantly.
+- 🧠 **Knows its brain**: each tab shows the **provider and the exact model** that produced it
+  (e.g. `Provider: Groq` / `Model: whisper-large-v3`, or `Provider: Gemini` / `Model: gemini-2.5-flash`)
+  right above the Copy / Edit buttons — so you always know which LLM wrote the note.
+- 🔄 **Sparkle ✨ Re-polish**: Didn't like the result? Re-process with a different LLM instantly (the label updates to the new brain).
 
 ---
 

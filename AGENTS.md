@@ -99,3 +99,10 @@ hard-coded fallback — it can be re-added (like anything else) as a custom prov
 - After processing completes, `_autoCopyResult()` in `_HomePageState` reads prefs and copies the selected transcript to clipboard via `Clipboard.setData`
 - Shows a snackbar confirming the copy
 - Persisted in `SharedPreferences`
+
+## Provider/model label on the Note screen
+- `ProviderResult` (`main.dart:3482`) = `{content, providerName, model}` — the text plus the brain that produced it (holds STT results too).
+- `TranscriptionService`: `transcribe()` reports `Groq` + the STT model; `clean()`/`polish()`/`rePolishWithFallback()` and the shared `_runProviderChain()` (new `modelFor` hook) return `ProviderResult` naming the provider that **actually answered** — never a guess.
+- `TranscribePage` caches `_sttResult`/`_cleanedResult` and pops `raw/cleaned/polished` `Provider`+`Model` keys; `NoteProvider` stores them per tab (`updateTranscripts`), and `updatePolishedNote(..., providerName:, model:)` refreshes them after a ✨ re-polish.
+- `NotePage._buildProviderInfo()` renders a "Provider: … / Model: …" card above the Copy/Edit bar for the **selected tab** (Raw → Groq Whisper, Cleaned, Polished); returns `SizedBox.shrink()` when empty (e.g. "No speech detected").
+- Covered by `test/note_provider_label_test.dart` (8 tests: `ProviderResult`, provider/model storage, and the Raw/Cleaned/Polished label widget tests).
