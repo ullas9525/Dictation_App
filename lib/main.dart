@@ -15,6 +15,217 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
+// --- Floating dictation bubble (Android) ---
+//
+// The bubble itself is native (OverlayService.kt). Dart supplies the settings,
+// the recording/processing sheet (overlayMain) and the final insert action.
+
+/// Which transcript the bubble should offer first / paste by default.
+enum TranscriptFormat { raw, clean, polished }
+
+/// Reads a stored format, falling back to [TranscriptFormat.polished] for old
+/// installs or unknown values.
+TranscriptFormat transcriptFormatFromPref(String? value) {
+  for (final TranscriptFormat format in TranscriptFormat.values) {
+    if (format.name == value) return format;
+  }
+  return TranscriptFormat.polished;
+}
+
+extension TranscriptFormatLabels on TranscriptFormat {
+  /// Short label used by the result chips.
+  String get label => switch (this) {
+        TranscriptFormat.raw => 'Raw',
+        TranscriptFormat.clean => 'Clean',
+        TranscriptFormat.polished => 'Polished',
+      };
+
+  /// Full label used by Settings.
+  String get settingLabel => switch (this) {
+        TranscriptFormat.raw => 'Raw transcript',
+        TranscriptFormat.clean => 'Clean transcript',
+        TranscriptFormat.polished => 'Polished note',
+      };
+}
+
+/// Packages the bubble reacts to when no preference has been saved yet.
+const String defaultOverlayTargetApps = 'com.whatsapp';
+
+/// Parses the comma-separated target list. Empty input falls back to WhatsApp
+/// so the feature is never silently unusable after a bad write.
+List<String> parseOverlayTargetApps(String? raw) {
+  final List<String> result = <String>[];
+  final Set<String> seen = <String>{};
+  for (final String part in (raw ?? '').split(',')) {
+    final String value = part.trim();
+    if (value.isEmpty || !seen.add(value)) continue;
+    result.add(value);
+  }
+  if (result.isEmpty) result.add(defaultOverlayTargetApps);
+  return result;
+}
+
+/// Serialises the target list, trimming blanks/duplicates and never writing an
+/// empty value that would disable the bubble without explanation.
+String overlayTargetAppsValue(Iterable<String> packages) {
+  final List<String> result = <String>[];
+  final Set<String> seen = <String>{};
+  for (final String packageName in packages) {
+    final String value = packageName.trim();
+    if (value.isEmpty || !seen.add(value)) continue;
+    result.add(value);
+  }
+  if (result.isEmpty) return defaultOverlayTargetApps;
+  return result.join(',');
+}
+
+/// `*` allows every app; otherwise require a plausible Android package name.
+bool isValidOverlayTargetApp(String value) {
+  final String trimmed = value.trim();
+  if (trimmed == '*') return true;
+  return RegExp(r'^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$')
+      .hasMatch(trimmed);
+}
+
+String overlayTargetAppLabel(String packageName) {
+  switch (packageName) {
+    case '*':
+      return 'Any app';
+    case 'com.whatsapp':
+      return 'WhatsApp';
+    default:
+      return packageName;
+  }
+}
+
+/// SharedPreferences keys used by both the Flutter settings screen and the
+/// native bubble (which reads them from `FlutterSharedPreferences` with the
+/// `flutter.` prefix).
+class OverlayPrefs {
+  static const String enabled = 'overlay_enabled';
+  static const String targetFormat = 'overlay_target_format';
+  static const String targetApps = 'overlay_target_apps';
+}
+
+/// Native permission/service state reported by `dictation_app/overlay`.
+class OverlayStatus {
+  const OverlayStatus({
+    this.supported = true,
+    this.canDrawOverlays = false,
+    this.accessibilityEnabled = false,
+    this.serviceRunning = false,
+  });
+
+  /// Used on non-Android platforms and when the platform channel is missing.
+  static const OverlayStatus unsupported = OverlayStatus(supported: false);
+
+  final bool supported;
+  final bool canDrawOverlays;
+  final bool accessibilityEnabled;
+  final bool serviceRunning;
+
+  /// Both manual grants are present.
+  bool get ready => supported && canDrawOverlays && accessibilityEnabled;
+}
+
+/// Thin, failure-tolerant bridge to the native bubble.
+///
+/// Every call swallows `MissingPluginException` / `PlatformException`: on
+/// desktop/tests there is no Android host, and a settings screen must still
+/// render instead of crashing.
+class OverlayBridge {
+  static const MethodChannel _settings =
+      MethodChannel('dictation_app/overlay');
+  static const MethodChannel _activity =
+      MethodChannel('dictation_app/overlay_activity');
+
+  static Future<OverlayStatus> getStatus() async {
+    if (!Platform.isAndroid) return OverlayStatus.unsupported;
+    try {
+      final Map<String, bool>? result =
+          await _settings.invokeMapMethod<String, bool>('getStatus');
+      if (result == null) return const OverlayStatus();
+      return OverlayStatus(
+        canDrawOverlays: result['canDrawOverlays'] ?? false,
+        accessibilityEnabled: result['accessibilityEnabled'] ?? false,
+        serviceRunning: result['serviceRunning'] ?? false,
+      );
+    } catch (_) {
+      return OverlayStatus.unsupported;
+    }
+  }
+
+  static Future<bool> requestOverlayPermission() =>
+      _invokeBool(_settings, 'requestOverlayPermission');
+
+  static Future<bool> openAccessibilitySettings() =>
+      _invokeBool(_settings, 'openAccessibilitySettings');
+
+  static Future<bool> startOverlay() => _invokeBool(_settings, 'startOverlay');
+
+  static Future<bool> stopOverlay() => _invokeBool(_settings, 'stopOverlay');
+
+  static Future<bool> requestNotificationPermission() =>
+      _invokeBool(_settings, 'requestNotificationPermission');
+
+  /// Puts [text] on the clipboard and queues the accessibility paste.
+  /// Returns false when the accessibility service is not running.
+  static Future<bool> insertText(String text) async {
+    if (!Platform.isAndroid || text.isEmpty) return false;
+    try {
+      return await _activity.invokeMethod<bool>(
+            'insertText',
+            <String, dynamic>{'text': text},
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> copyText(String text) async {
+    if (!Platform.isAndroid || text.isEmpty) return false;
+    try {
+      return await _activity.invokeMethod<bool>(
+            'copyText',
+            <String, dynamic>{'text': text},
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> accessibilityConnected() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _activity.invokeMethod<bool>('accessibilityConnected') ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Closes the overlay activity (the target app then regains focus).
+  static Future<void> closeOverlay() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _activity.invokeMethod<void>('close');
+    } catch (_) {
+      // Already closed.
+    }
+  }
+
+  static Future<bool> _invokeBool(MethodChannel channel, String method) async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await channel.invokeMethod<bool>(method) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
 void main() {
   runApp(
     MultiProvider(
@@ -177,19 +388,41 @@ class RecordingProvider with ChangeNotifier {
     _initRecorder();
   }
 
-  Future<void> _initRecorder() async {
+  /// In-flight microphone initialisation. The overlay creates a provider and
+  /// starts recording immediately, so `startRecording()` can race the
+  /// constructor's permission request; sharing the future avoids asking twice
+  /// (and avoids treating the second request as a denial).
+  Future<void>? _initInFlight;
+
+  Future<void> _initRecorder() {
+    if (_isInitialized) return Future<void>.value();
+    final Future<void>? existing = _initInFlight;
+    if (existing != null) return existing;
+
+    final Future<void> future = _doInitRecorder();
+    _initInFlight = future;
+    future.whenComplete(() {
+      if (identical(_initInFlight, future)) _initInFlight = null;
+    });
+    return future;
+  }
+
+  Future<void> _doInitRecorder() async {
     print("DEBUG: Initializing recorder permissions...");
-    final status = await ph.Permission.microphone.request();
-    if (status != ph.PermissionStatus.granted) {
-      print("DEBUG: Microphone permission NOT granted");
-      return;
+    try {
+      final status = await ph.Permission.microphone.request();
+      if (status != ph.PermissionStatus.granted) {
+        print("DEBUG: Microphone permission NOT granted");
+        return;
+      }
+
+      _recorder = AudioRecorder();
+      _isInitialized = true;
+      print("DEBUG: Recorder initialized");
+      notifyListeners();
+    } catch (e) {
+      print("DEBUG: Error initializing recorder: $e");
     }
-    
-    // Test if we can create one
-    _recorder = AudioRecorder();
-    _isInitialized = true;
-    print("DEBUG: Recorder initialized");
-    notifyListeners();
   }
 
   void _startTimer() {
@@ -2309,7 +2542,8 @@ class SettingsPage extends StatefulWidget {
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+class _SettingsPageState extends State<SettingsPage>
+    with WidgetsBindingObserver {
 
   // --- GROQ STATE (STT only) ---
   String _groqApiKey = '';
@@ -2342,6 +2576,13 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _autoCopyEnabled = false;
   String _autoCopyTarget = 'polished'; // 'clean' or 'polished'
 
+  // --- FLOATING DICTATION BUBBLE ---
+  bool _overlayEnabled = false;
+  TranscriptFormat _overlayTargetFormat = TranscriptFormat.polished;
+  List<String> _overlayTargetApps = <String>[defaultOverlayTargetApps];
+  OverlayStatus _overlayStatus = OverlayStatus.unsupported;
+  bool _overlayBusy = false;
+
   final List<String> _groqSttModels = [
     'whisper-large-v3-turbo',
     'whisper-large-v3',
@@ -2361,7 +2602,18 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadSettings();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Permissions are granted in Android Settings, so returning to the app is
+    // the moment their status (and the service) needs refreshing.
+    if (state == AppLifecycleState.resumed && _overlayEnabled) {
+      _refreshOverlayStatus();
+      _syncOverlayService();
+    }
   }
 
   Future<void> _loadSettings() async {
@@ -2380,6 +2632,11 @@ class _SettingsPageState extends State<SettingsPage> {
         _selectedTargetLanguage = prefs.getString('target_language') ?? 'English';
         _autoCopyEnabled = prefs.getBool('auto_copy_enabled') ?? false;
         _autoCopyTarget = prefs.getString('auto_copy_target') ?? 'polished';
+        _overlayEnabled = prefs.getBool(OverlayPrefs.enabled) ?? false;
+        _overlayTargetFormat = transcriptFormatFromPref(
+            prefs.getString(OverlayPrefs.targetFormat));
+        _overlayTargetApps = parseOverlayTargetApps(
+            prefs.getString(OverlayPrefs.targetApps));
         _openRouterModelsRefreshedAtMs =
             prefs.getInt('openrouter_free_models_refreshed_at_ms');
         
@@ -2387,6 +2644,11 @@ class _SettingsPageState extends State<SettingsPage> {
         if (!_targetLanguages.contains(_selectedTargetLanguage)) _selectedTargetLanguage = _targetLanguages.first;
       });
     }
+
+    // The native side owns the real permission/service state; fetch it after
+    // the saved values are on screen, then make the service match the toggle.
+    await _refreshOverlayStatus();
+    await _syncOverlayService();
   }
 
   /// Persists everything a moment after a change is made (debounced so typing a
@@ -2410,6 +2672,11 @@ class _SettingsPageState extends State<SettingsPage> {
     await prefs.setString('target_language', _selectedTargetLanguage);
     await prefs.setBool('auto_copy_enabled', _autoCopyEnabled);
     await prefs.setString('auto_copy_target', _autoCopyTarget);
+    await prefs.setBool(OverlayPrefs.enabled, _overlayEnabled);
+    await prefs.setString(
+        OverlayPrefs.targetFormat, _overlayTargetFormat.name);
+    await prefs.setString(
+        OverlayPrefs.targetApps, overlayTargetAppsValue(_overlayTargetApps));
   }
 
   @override
@@ -2419,6 +2686,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final bool pending = _autoSaveTimer?.isActive ?? false;
     _autoSaveTimer?.cancel();
     if (pending) _persistAllSettings();
+    WidgetsBinding.instance.removeObserver(this);
     _groqKeyController.dispose();
     super.dispose();
   }
@@ -2576,6 +2844,10 @@ class _SettingsPageState extends State<SettingsPage> {
               label: const Text('Connect another provider'),
             ),
           ),
+          const SizedBox(height: 24),
+          _buildSectionTitle('Floating Dictation Bubble'),
+          const SizedBox(height: 8),
+          _buildOverlaySection(),
           const SizedBox(height: 24),
           _buildSectionTitle('Translation'),
           const SizedBox(height: 8),
@@ -3008,6 +3280,421 @@ class _SettingsPageState extends State<SettingsPage> {
         );
       },
     );
+  }
+
+  // --- Floating dictation bubble settings ---
+
+  Widget _buildOverlaySection() {
+    final bool android = Platform.isAndroid;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade400, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Enable floating bubble'),
+            subtitle: Text(
+              android
+                  ? 'Show a mic bubble when a supported app focuses a text field.'
+                  : 'Android only — the bubble needs overlay and accessibility permissions.',
+            ),
+            value: _overlayEnabled,
+            onChanged:
+                android && !_overlayBusy ? _setOverlayEnabled : null,
+          ),
+          if (!android)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                'The normal Home-screen dictation still works here. '
+                'The floating bubble and direct insertion are Android-only.',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              ),
+            )
+          else if (_overlayEnabled) ...[
+            const Divider(),
+            _buildOverlayStatusRow(
+              icon: Icons.layers_outlined,
+              title: 'Display over other apps',
+              granted: _overlayStatus.canDrawOverlays,
+              actionLabel: 'Grant',
+              onAction: _openOverlayPermission,
+            ),
+            _buildOverlayStatusRow(
+              icon: Icons.accessibility_new,
+              title: 'Dictation bubble accessibility',
+              granted: _overlayStatus.accessibilityEnabled,
+              actionLabel: 'Enable',
+              onAction: _openAccessibilitySettings,
+            ),
+            Row(
+              children: [
+                Icon(
+                  _overlayStatus.serviceRunning
+                      ? Icons.check_circle
+                      : Icons.info_outline,
+                  size: 20,
+                  color: _overlayStatus.serviceRunning
+                      ? Colors.green
+                      : Colors.orange,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _overlayStatus.serviceRunning
+                        ? 'Bubble service is running'
+                        : 'Bubble service is stopped — grant both permissions, then refresh.',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                IconButton(
+                  icon: _overlayBusy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                  tooltip: 'Refresh permission status and start the service',
+                  onPressed: _overlayBusy ? null : _syncOverlayService,
+                ),
+              ],
+            ),
+            if (_overlayStatus.ready && !_overlayStatus.serviceRunning)
+              Text(
+                'Both permissions are granted. Tap refresh to start the bubble service.',
+                style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+              ),
+            const Divider(),
+            DropdownButtonFormField<TranscriptFormat>(
+              value: _overlayTargetFormat,
+              decoration: const InputDecoration(
+                labelText: 'Default transcript',
+                helperText:
+                    'Preselected in the bubble. You can switch Raw / Clean / Polished per message before inserting.',
+                helperMaxLines: 2,
+              ),
+              items: TranscriptFormat.values
+                  .map((TranscriptFormat format) => DropdownMenuItem<TranscriptFormat>(
+                        value: format,
+                        child: Text(format.settingLabel),
+                      ))
+                  .toList(),
+              onChanged: (TranscriptFormat? value) {
+                if (value == null) return;
+                setState(() => _overlayTargetFormat = value);
+                _scheduleAutoSave();
+              },
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Apps that show the bubble',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'The bubble only appears when one of these apps focuses an editable, non-password field.',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: <Widget>[
+                ..._overlayTargetApps.map(
+                  (String packageName) => InputChip(
+                    avatar: Icon(
+                      packageName == '*' ? Icons.public : Icons.chat_bubble_outline,
+                      size: 18,
+                    ),
+                    label: Text(overlayTargetAppLabel(packageName)),
+                    onDeleted: _overlayTargetApps.length > 1
+                        ? () => _removeOverlayTargetApp(packageName)
+                        : null,
+                  ),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.add, size: 18),
+                  label: const Text('Add app'),
+                  onPressed: _overlayBusy ? null : _addOverlayTargetApp,
+                ),
+              ],
+            ),
+            if (!_overlayTargetApps.contains('*'))
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _overlayBusy ? null : _addAnyApp,
+                  icon: const Icon(Icons.public, size: 18),
+                  label: const Text('Allow any app'),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.green.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.lock_outline, size: 18, color: Colors.green.shade700),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Privacy: audio is captured only after you tap the bubble. '
+                      'The accessibility service reads only the focused text field '
+                      '(to place the bubble and paste the result); it does not store '
+                      'screen content or audio. The transcript still goes through the '
+                      'Groq / LLM providers configured above.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOverlayStatusRow({
+    required IconData icon,
+    required String title,
+    required bool granted,
+    required String actionLabel,
+    required Future<void> Function() onAction,
+  }) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: granted ? Colors.green : Colors.orange),
+        const SizedBox(width: 8),
+        Expanded(child: Text(title, style: const TextStyle(fontSize: 13))),
+        if (granted)
+          const Icon(Icons.check_circle, size: 18, color: Colors.green)
+        else
+          TextButton(
+            onPressed: _overlayBusy ? null : () => onAction(),
+            child: Text(actionLabel),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _setOverlayEnabled(bool value) async {
+    setState(() => _overlayEnabled = value);
+    // Persist immediately (not on the 300 ms debounce): the native
+    // accessibility service reads this pref on the very next focus event.
+    await _persistAllSettings();
+
+    if (!Platform.isAndroid) return;
+    if (!value) {
+      await OverlayBridge.stopOverlay();
+      await _refreshOverlayStatus();
+      return;
+    }
+
+    // Android 13+ shows the foreground-service notification only when this
+    // runtime permission is granted; a denial is not fatal.
+    await OverlayBridge.requestNotificationPermission();
+    final OverlayStatus status = await OverlayBridge.getStatus();
+    if (!mounted) return;
+    setState(() => _overlayStatus = status);
+
+    if (!status.canDrawOverlays) {
+      await _showOverlaySetupDialog();
+      return;
+    }
+    if (!status.accessibilityEnabled) {
+      await _showAccessibilityDialog();
+      return;
+    }
+    await _syncOverlayService();
+  }
+
+  Future<void> _showOverlaySetupDialog() async {
+    final bool openSettings = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Two permissions are needed'),
+            content: const Text(
+              '1. Allow "Display over other apps" so the bubble can sit above WhatsApp.\n\n'
+              '2. Turn on the "Dictation bubble" accessibility service so the app can '
+              'detect a focused text field and paste the transcript.\n\n'
+              'Audio is only captured after you tap the bubble.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Later'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Open overlay settings'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (openSettings) await _openOverlayPermission();
+  }
+
+  Future<void> _showAccessibilityDialog() async {
+    final bool openSettings = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('One more step'),
+            content: const Text(
+              'Turn on the "Dictation bubble" service in Accessibility so the app can '
+              'see which text field is focused and paste the transcript. '
+              'It never stores your screen content.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Later'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Open Accessibility'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (openSettings) await _openAccessibilitySettings();
+  }
+
+  Future<void> _openOverlayPermission() async {
+    await OverlayBridge.requestOverlayPermission();
+    // Status refreshes when the app resumes from Android Settings.
+  }
+
+  Future<void> _openAccessibilitySettings() async {
+    await OverlayBridge.openAccessibilitySettings();
+  }
+
+  Future<void> _refreshOverlayStatus() async {
+    if (!Platform.isAndroid) {
+      if (mounted) {
+        setState(() => _overlayStatus = OverlayStatus.unsupported);
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _overlayBusy = true);
+    final OverlayStatus status = await OverlayBridge.getStatus();
+    if (!mounted) return;
+    setState(() {
+      _overlayStatus = status;
+      _overlayBusy = false;
+    });
+  }
+
+  /// Starts the foreground service when the feature is on and both permissions
+  /// are granted; stops it when the toggle is off.
+  Future<void> _syncOverlayService() async {
+    if (!Platform.isAndroid) return;
+    if (!_overlayEnabled) {
+      await OverlayBridge.stopOverlay();
+      await _refreshOverlayStatus();
+      return;
+    }
+    final OverlayStatus status = await OverlayBridge.getStatus();
+    if (!mounted) return;
+    setState(() => _overlayStatus = status);
+    if (!status.ready) return;
+    if (!status.serviceRunning) {
+      await OverlayBridge.startOverlay();
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      await _refreshOverlayStatus();
+    }
+  }
+
+  Future<void> _addOverlayTargetApp() async {
+    final TextEditingController controller = TextEditingController();
+    final String? value = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add an app'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Enter the app\'s Android package name. WhatsApp is '
+              '"com.whatsapp".',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: 'Package name',
+                hintText: 'com.example.app',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (String text) =>
+                  Navigator.pop(ctx, text.trim()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (value == null || value.isEmpty) return;
+    if (!isValidOverlayTargetApp(value)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('That does not look like an Android package name.'),
+          ),
+        );
+      }
+      return;
+    }
+    if (_overlayTargetApps.contains(value)) return;
+    setState(() {
+      _overlayTargetApps.add(value);
+    });
+    _scheduleAutoSave();
+  }
+
+  void _addAnyApp() {
+    if (_overlayTargetApps.contains('*')) return;
+    setState(() {
+      _overlayTargetApps.add('*');
+    });
+    _scheduleAutoSave();
+  }
+
+  void _removeOverlayTargetApp(String packageName) {
+    setState(() {
+      _overlayTargetApps.remove(packageName);
+      if (_overlayTargetApps.isEmpty) {
+        _overlayTargetApps.add(defaultOverlayTargetApps);
+      }
+    });
+    _scheduleAutoSave();
   }
 
   String _formatFreeModelRefreshTime(int? refreshedAtMs) {
@@ -3897,3 +4584,480 @@ class BrainPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant BrainPainter oldDelegate) => progress != oldDelegate.progress;
 }
+
+// --- Floating dictation sheet (second Flutter entrypoint) ---
+//
+// Launched by OverlayService when the mic bubble is tapped. It is intentionally
+// separate from the full app: a small bottom sheet that records, runs the
+// existing STT -> Clean -> Polish pipeline, previews all three formats, and
+// hands the chosen text to the accessibility service.
+
+/// Runs inside OverlayDictationActivity. Keep this entrypoint tiny: it only
+/// needs the recorder and the transcription service.
+@pragma('vm:entry-point')
+void overlayMain() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(
+    ChangeNotifierProvider<RecordingProvider>(
+      create: (_) => RecordingProvider(),
+      child: const _OverlayDictationApp(),
+    ),
+  );
+}
+
+class _OverlayDictationApp extends StatelessWidget {
+  const _OverlayDictationApp();
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFFDC2626),
+      brightness: Brightness.dark,
+    );
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorScheme: scheme,
+        scaffoldBackgroundColor: Colors.transparent,
+        snackBarTheme: const SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+        ),
+      ),
+      home: const OverlayDictationPage(),
+    );
+  }
+}
+
+enum _OverlayStage { starting, recording, processing, error }
+
+class OverlayDictationPage extends StatefulWidget {
+  const OverlayDictationPage({super.key});
+
+  @override
+  State<OverlayDictationPage> createState() => _OverlayDictationPageState();
+}
+
+class _OverlayDictationPageState extends State<OverlayDictationPage> {
+  final TranscriptionService _service = TranscriptionService();
+  final Map<TranscriptFormat, ProviderResult> _results =
+      <TranscriptFormat, ProviderResult>{};
+
+  _OverlayStage _stage = _OverlayStage.starting;
+  TranscriptFormat _selectedFormat = TranscriptFormat.polished;
+  String? _audioPath;
+  String _errorMessage = '';
+  bool _startingRecording = false;
+  bool _finishing = false;
+  bool _closed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPrefsAndStart();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+  }
+
+  Future<void> _loadPrefsAndStart() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final TranscriptFormat format =
+        transcriptFormatFromPref(prefs.getString(OverlayPrefs.targetFormat));
+    if (!mounted) return;
+    setState(() {
+      _selectedFormat = format;
+    });
+    await _startRecording();
+  }
+
+  Future<void> _startRecording() async {
+    if (_startingRecording || _closed) return;
+    _startingRecording = true;
+    _finishing = false;
+    await _deleteAudio();
+    if (!mounted) return;
+    setState(() {
+      _stage = _OverlayStage.starting;
+      _errorMessage = '';
+      _results.clear();
+    });
+
+    final RecordingProvider recorder = context.read<RecordingProvider>();
+    await recorder.startRecording();
+    if (!mounted || _closed) return;
+
+    if (!recorder.isSessionActive) {
+      setState(() {
+        _stage = _OverlayStage.error;
+        _startingRecording = false;
+        _errorMessage =
+            'The microphone could not start. Allow microphone access for this app in '
+            'Android Settings, then try again.';
+      });
+      return;
+    }
+
+    setState(() {
+      _stage = _OverlayStage.recording;
+      _startingRecording = false;
+    });
+  }
+
+  /// ✓ tap: stop recording and auto-insert the default format — no preview,
+  /// no confirmation. The user only taps once more after the mic.
+  Future<void> _submit() async {
+    if (_finishing || _closed) return;
+    _finishing = true;
+    if (mounted) {
+      setState(() {
+        _stage = _OverlayStage.processing;
+      });
+    }
+    final RecordingProvider recorder = context.read<RecordingProvider>();
+    final String? path = await recorder.stopRecording();
+    if (!mounted || _closed) return;
+    if (path == null || path.isEmpty) {
+      setState(() {
+        _stage = _OverlayStage.error;
+        _finishing = false;
+        _errorMessage = 'The recording could not be saved. Please try again.';
+      });
+      return;
+    }
+    _audioPath = path;
+    await _finishAndInsert();
+  }
+
+  Future<void> _finishAndInsert() async {
+    final String? path = _audioPath;
+    if (path == null) {
+      await _startRecording();
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _stage = _OverlayStage.processing;
+        _errorMessage = '';
+      });
+    }
+
+    try {
+      final ProviderResult raw = await _service.transcribe(path);
+      if (!mounted || _closed) return;
+      if (raw.content.trim().length < 3) {
+        _finishing = false;
+        setState(() {
+          _stage = _OverlayStage.error;
+          _errorMessage =
+              'No speech was detected. Tap the bubble again and speak a little closer.';
+        });
+        return;
+      }
+      _results[TranscriptFormat.raw] = raw;
+      // The raw transcript is cached, so the audio is no longer needed even if
+      // a later LLM stage has to be retried.
+      await _deleteAudio();
+
+      if (!mounted || _closed) return;
+      final ProviderResult text = switch (_selectedFormat) {
+        TranscriptFormat.raw => raw,
+        TranscriptFormat.clean => await _service.clean(raw.content),
+        TranscriptFormat.polished => await _service.polish(raw.content),
+      };
+      if (!mounted || _closed) return;
+      _results[_selectedFormat] = text;
+
+      await _insertText(text.content.trim());
+    } catch (e) {
+      if (!mounted || _closed) return;
+      _finishing = false;
+      setState(() {
+        _stage = _OverlayStage.error;
+        _errorMessage = _friendlyError(e);
+      });
+    }
+  }
+
+  Future<void> _retryAfterError() async {
+    final String? path = _audioPath;
+    if (path != null && File(path).existsSync()) {
+      _finishing = true;
+      await _finishAndInsert();
+    } else {
+      await _startRecording();
+    }
+  }
+
+  Future<void> _insertText(String text) async {
+    if (text.isEmpty) {
+      _finishing = false;
+      return;
+    }
+
+    final bool queued = await OverlayBridge.insertText(text);
+    if (!mounted || _closed) return;
+
+    if (!queued) {
+      // Accessibility is off or the field vanished. Leave the text on the
+      // clipboard so it can be pasted, then close without a copy step.
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!mounted || _closed) return;
+      await _close();
+      return;
+    }
+
+    // Native queues the paste ~700 ms after this call. Let the sheet close
+    // first so the target app regains input focus.
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await _close();
+  }
+
+  Future<void> _close() async {
+    if (_closed) return;
+    _closed = true;
+    try {
+      final RecordingProvider recorder = context.read<RecordingProvider>();
+      if (recorder.isSessionActive) await recorder.cancelRecording();
+    } catch (_) {
+      // The provider may already be gone while the activity is finishing.
+    }
+    await _deleteAudio();
+    await OverlayBridge.closeOverlay();
+  }
+
+  Future<void> _deleteAudio() async {
+    final String? path = _audioPath;
+    _audioPath = null;
+    if (path == null) return;
+    try {
+      final File file = File(path);
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // Temp files are harmless; never fail the sheet for cleanup.
+    }
+  }
+
+  String _friendlyError(Object error) =>
+      error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
+
+  @override
+  Widget build(BuildContext context) {
+    final RecordingProvider recorder = context.watch<RecordingProvider>();
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (!didPop) _close();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        // Keeps the pill above the IME when it is still open underneath.
+        resizeToAvoidBottomInset: true,
+        body: SafeArea(
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: _buildStage(recorder),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The compact pill that sits above the keyboard. While recording it holds
+  /// exactly three things: a cancel ✕, the voice visualizer and a ✓ that
+  /// finishes and inserts without any further prompt.
+  Widget _pill({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1E24),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _buildStage(RecordingProvider recorder) {
+    switch (_stage) {
+      case _OverlayStage.starting:
+        return _buildStarting();
+      case _OverlayStage.recording:
+        return _buildRecording(recorder);
+      case _OverlayStage.processing:
+        return _buildProcessing();
+      case _OverlayStage.error:
+        return _buildError();
+    }
+  }
+
+  double _visualLevel(double decibel) {
+    // Typical speech sits around -30 … -10 dBFS in this stream.
+    final double normalized = (decibel + 45) / 45;
+    return normalized.clamp(0.08, 1.0);
+  }
+
+  Widget _buildStarting() {
+    return _pill(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            _errorMessage.isEmpty ? 'Opening the microphone…' : _errorMessage,
+            style: const TextStyle(fontSize: 12, color: Colors.white70),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            tooltip: 'Close',
+            onPressed: _close,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecording(RecordingProvider recorder) {
+    final double level = _visualLevel(recorder.decibelLevel);
+    return _pill(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            tooltip: 'Cancel',
+            onPressed: _close,
+          ),
+          _VoiceVisualizer(level: level),
+          // ✓ stops and auto-inserts the default transcript format — no
+          // preview step, no second confirmation.
+          Material(
+            color: const Color(0xFF22C55E),
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: _submit,
+              child: const SizedBox(
+                width: 40,
+                height: 40,
+                child: Icon(Icons.check, size: 22, color: Colors.white),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProcessing() {
+    return _pill(
+      child: SizedBox(
+        width: 44,
+        height: 44,
+        child: const CircularProgressIndicator(
+          strokeWidth: 3,
+          valueColor: AlwaysStoppedAnimation(Color(0xFF22C55E)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildError() {
+    return _pill(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(6, 2, 6, 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.error_outline,
+                    size: 18, color: Colors.orange),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _errorMessage,
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.white70),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: _close,
+                  child: const Text('Close'),
+                ),
+                const SizedBox(width: 4),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFDC2626),
+                    foregroundColor: Colors.white,
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: _retryAfterError,
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('Try again'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Five animated bars driven by the recorder's amplitude stream. Small and
+/// dumb on purpose — the timer text next to it carries the exact duration.
+class _VoiceVisualizer extends StatelessWidget {
+  const _VoiceVisualizer({required this.level});
+
+  /// 0 (silence) … 1 (loud).
+  final double level;
+
+  static const List<double> _shape = <double>[0.40, 0.70, 1.00, 0.70, 0.40];
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 26,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List<Widget>.generate(_shape.length, (int index) {
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 90),
+            curve: Curves.easeOut,
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            width: 4,
+            height: 4 + 22 * _shape[index] * level,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEF4444).withValues(alpha: 0.95),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+}
+

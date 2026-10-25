@@ -6,12 +6,12 @@ flutter pub get
 flutter run --release    # run on device
 flutter build apk --release
 flutter analyze          # lint (uses flutter_lints)
-flutter test             # 15 tests: provider registry/fallback + Settings auto-save widgets
+flutter test             # 34 tests: provider registry/fallback + labels + Settings auto-save + overlay settings
 ```
 
 ## Architecture (serverless)
 
-- **All app code** in `lib/main.dart` (~3750 lines, single file)
+- **All app code** in `lib/main.dart` (~5,250 lines, single file)
 - **Zero backend**: calls Groq (STT) + OpenRouter/NVIDIA (LLM) directly from Flutter via `http` package
 - **3 API calls per note**: Groq Whisper STT → LLM Clean (remove fillers, fix grammar) → LLM Polish (structured markdown, with translation)
 - **State management**: Provider (`ThemeProvider`, `NoteProvider`, `RecordingProvider`)
@@ -41,6 +41,74 @@ hard-coded fallback — it can be re-added (like anything else) as a custom prov
 - **The model list is not in the initial view**: it is revealed by the "Edit models (N available)" / "Hide model list" toggle (`showModelsEditor`), which is also how a custom provider's list is maintained. A provider with no models yet (`needsCustomModel`) falls back to one "Model" text field so it can be created at all. `ProviderRegistry.parseModelList()` / `modelChoices()` are the only list parsers — the dropdown always offers the selected model first (`modelChoices` prepends it when the edited list dropped it). Covered by tests in `test/provider_registry_test.dart`.
 - **Everything auto-saves — Settings has no save button and no save indicator.** `_scheduleAutoSave()` (300 ms debounce) → `_persistAllSettings()` writes keys, STT model, registry, translation and clipboard prefs after each change — silently, the Settings app bar shows nothing for it (no 💾, no ✓), and `dispose()` flushes a pending write. In the provider sheet, `autoApply()` persists each valid edit immediately via `_upsertProvider(..., silent: true)` (the `silent` flag suppresses the per-keystroke snackbar) and the button reads **Done**; only *creating* a provider keeps an explicit "Connect provider" action.
 - The ✨ Try-Again sheet and the `TranscribePage` error screen both build their provider/model pickers from the registry (`_loadRetryOptions`), and the retry applies the selected model to its provider before re-running.
+
+## Floating dictation bubble (Android only)
+
+A Whisper-Flow-style mic bubble that appears above the keyboard (only while the
+IME window is visible) when a supported app focuses a text field. Tapping it
+opens the compact recorder pill (✕ cancel · voice visualizer · ✓ auto-insert)
+that records, runs the STT → Clean → Polish pipeline for the Settings' default
+format, and auto-inserts on ✓ — no preview step.
+
+**Native pieces** (`android/app/src/main/kotlin/com/example/dictation_app/`):
+- `OverlayService.kt` — foreground service (type `specialUse`) that owns the
+  draggable `TYPE_APPLICATION_OVERLAY` bubble. `isRunning` is the status shown in
+  Settings; `showBubble(anchorBottom)` / `hideBubble()` are called by the
+  accessibility service; `ensureRunning()` lets accessibility restart it.
+- `DictationAccessibilityService.kt` — watches focus/window events, finds the focused
+  editable **non-password** node in an allow-listed package, hides the bubble in our
+  own activity, and anchors the bubble above the IME (`TYPE_INPUT_METHOD` window top).
+  With no IME window visible the bubble stays hidden. `queueInsert(text)` waits
+  ~700 ms, focuses the field, tries `ACTION_PASTE`, verifies the text, then falls back
+  to `ACTION_SET_TEXT` (append, caret at end) and finally a clipboard toast.
+- `OverlayDictationActivity.kt` — translucent `FlutterActivity` running the separate
+  `overlayMain` entrypoint. `getBackgroundMode()` is `transparent`. Its channel
+  `dictation_app/overlay_activity` exposes `insertText` (clipboard + queue paste),
+  `copyText`, `accessibilityConnected`, and `close`. It deliberately does **not**
+  finish inside `insertText`; Dart calls `close` so the target app regains focus
+  before the delayed paste.
+- `MainActivity.kt` — channel `dictation_app/overlay`: `getStatus`,
+  `requestOverlayPermission`, `openAccessibilitySettings`, `startOverlay`,
+  `stopOverlay`, `requestNotificationPermission`.
+- Manifest: `SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`,
+  `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`; services and
+  `OverlayDictationActivity` (`OverlayDialogTheme`, `noHistory`, own task affinity).
+  Accessibility config: view focus / window state / window content / windows changed,
+  `canRetrieveWindowContent`, `flagRetrieveInteractiveWindows`.
+
+**Flutter pieces** (all in `lib/main.dart`):
+- `TranscriptFormat` / `transcriptFormatFromPref` / labels (`main.dart:24`).
+- `OverlayPrefs` (`main.dart:104`): `overlay_enabled`, `overlay_target_format`
+  (`raw`/`clean`/`polished`), `overlay_target_apps` (comma-separated package names;
+  default `com.whatsapp`; `*` = any app).
+- `parseOverlayTargetApps` / `overlayTargetAppsValue` / `isValidOverlayTargetApp` /
+  `overlayTargetAppLabel` — the only target-list parsers. Empty input falls back to
+  WhatsApp; serialisation trims/dedupes and never writes an empty value.
+- `OverlayStatus` + `OverlayBridge` (`main.dart:111` / `main.dart:136`) — tolerant of
+  `MissingPluginException` / `PlatformException`; non-Android returns unsupported.
+- Settings section **Floating Dictation Bubble** (`_buildOverlaySection`): enable
+  toggle, overlay/accessibility status rows with grant actions, refresh, default
+  transcript dropdown, target-app chips (WhatsApp, custom packages, `*`), privacy
+  copy. Status refreshes on app resume; enabling starts the foreground service once
+  both permissions exist; disabling stops it. `WidgetsBindingObserver` handles the
+  return from Android Settings.
+- `overlayMain()` (`main.dart:4574`) + `OverlayDictationPage` (`main.dart:4611`):
+  auto-starts recording on open, records with the existing `RecordingProvider`,
+  and shows the compact recorder pill: ✕ cancel · `_VoiceVisualizer` (five bars
+  fed by `RecordingProvider.decibelLevel`) · ✓ (`_submit`). ✓ runs only the
+  stages needed for the Settings' default format (raw/clean/polished) and calls
+  `_insertText` — auto-insert with no preview. Errors show a small pill with
+  Try again (re-runs without re-recording while the cached raw/audio survives)
+  and Close. Insert falls back to the clipboard if accessibility is off.
+- The accessibility service reads Flutter prefs from the Android
+  `FlutterSharedPreferences` file with the `flutter.` key prefix. Do not rename the
+  three pref keys without updating `DictationAccessibilityService.kt`.
+- Tests: `test/overlay_settings_test.dart` covers format parsing/labels, target-app
+  parsing/serialisation/validation, the native pref-key contract, and
+  `OverlayStatus.ready`.
+- Prototype limitations (OEM battery savers, activity/keyboard quirks, best-effort
+  insertion) are listed in `KNOWN_ISSUES.md` under “Overlay feature — prototype
+  limitations”. Do not silently fix the parked audit items there.
 
 ## Key classes
 

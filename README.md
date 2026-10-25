@@ -48,6 +48,7 @@ Because professionals, students, and creators are always on the go. Voice notes 
   (e.g. `Provider: Groq` / `Model: whisper-large-v3`, or `Provider: Gemini` / `Model: gemini-2.5-flash`)
   right above the Copy / Edit buttons — so you always know which LLM wrote the note.
 - 🔄 **Sparkle ✨ Re-polish**: Didn't like the result? Re-process with a different LLM instantly (the label updates to the new brain).
+- 🫧 **Floating dictation bubble (Android)**: open WhatsApp (or any allow-listed app), tap a text field, and a mic bubble appears above the keyboard. Tap it, speak, stop, then insert Raw / Clean / Polished text without leaving the chat. The default format is chosen in Settings and can be overridden per message in the preview sheet.
 
 ---
 
@@ -80,6 +81,15 @@ Because professionals, students, and creators are always on the go. Voice notes 
    ```bash
    flutter run --release
    ```
+5. **Floating bubble (Android, optional)**: open **Settings → Floating Dictation Bubble**, turn it on, then grant:
+   - **Display over other apps** — lets the mic bubble sit above WhatsApp.
+   - **Dictation bubble** in **Accessibility** — detects the focused text field and pastes the result. The service only reads the focused editable field; it does not store screen content.
+   - **Notifications** (Android 13+) — shows the “Floating dictation ready” foreground-service notification.
+   - **Android 13+ sideloaded installs**: enabling the accessibility service may show a **“Restricted setting”** lock. Fix: **Settings → Apps → Dictation app → ⋮ → Allow restricted settings**, then enable the service (or install with `adb install`, which is not restricted).
+
+   Choose the **Default transcript** (Raw / Clean / Polished) and keep WhatsApp in **Apps that show the bubble**, or add another package name (`*` allows any app). Then open WhatsApp, open the keyboard, and tap the bubble that appears above it: the recorder pill (**✕** cancel · **voice visualizer** · **✓**) starts with the tap; **✓** transcribes and **auto-inserts the default format** with no further prompt. The bubble is hidden whenever the keyboard is closed. If Accessibility is unavailable, the chosen text is copied to the clipboard so it can be pasted manually.
+
+   > The bubble is Android-only. OEM battery optimizers may stop the foreground/accessibility service; reopen Settings → Floating Dictation Bubble to refresh the status. See `KNOWN_ISSUES.md` for the prototype limitations.
 
 ---
 

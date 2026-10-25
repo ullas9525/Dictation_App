@@ -1,6 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 <uses-permission android:name="android.permission.RECORD_AUDIO" />
 <uses-permission android:name="android.permission.INTERNET"/>
+<!-- Floating dictation bubble: draw over other apps, keep the bubble alive,
+     and post its foreground-service notification. -->
+<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="dictation_app"
         android:name="${applicationName}"
@@ -27,6 +33,47 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <!-- Translucent Flutter sheet that records, processes and previews the
+             transcript before inserting it into the focused text field. It runs
+             the "overlayMain" Dart entrypoint instead of the full app. -->
+        <activity
+            android:name=".OverlayDictationActivity"
+            android:exported="false"
+            android:theme="@style/OverlayDialogTheme"
+            android:taskAffinity="com.example.dictation_app.overlay"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="stateUnchanged|adjustResize"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true" />
+
+        <!-- Foreground service that owns the draggable mic bubble. -->
+        <service
+            android:name=".OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="floating_dictation_bubble" />
+        </service>
+
+        <!-- Sees which editable field is focused in an allow-listed app and
+             performs the paste. The user enables it in Android settings. -->
+        <service
+            android:name=".DictationAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
