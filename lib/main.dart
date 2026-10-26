@@ -13,7 +13,6 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
-import 'package:share_plus/share_plus.dart';
 
 // --- Floating dictation bubble (Android) ---
 //
@@ -1097,7 +1096,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   List<String> _availableMicrophones = ['Built-in'];
 
   late AnimationController _animationController;
-  late Animation<double> _scaleAnimation;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   late Animation<double> _textAnimation;
@@ -1108,9 +1106,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 200),
-    );
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.9).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
     _pulseController = AnimationController(
       vsync: this,
@@ -2152,26 +2147,6 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
     );
   }
 
-  Widget _buildCopyButton(BuildContext context, String label, String text, {bool isMarkdown = false}) {
-    return ElevatedButton.icon(
-      onPressed: () {
-        final textToCopy = isMarkdown ? text.replaceAll(RegExp(r'(#+\s?|\*\*|-\s?)'), '') : text;
-        Clipboard.setData(ClipboardData(text: textToCopy));
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Transcript copied!')),
-        );
-      },
-      icon: const Icon(Icons.copy),
-      label: Text(label),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.red,
-        foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-        minimumSize: const Size(double.infinity, 50),
-      ),
-    );
-  }
-
   /// Read-only card: shows MarkdownBody (for polished) or plain Text.
   Widget _buildReadCard(BuildContext context, String text, {required bool isMarkdown}) {
     return Container(
@@ -2200,7 +2175,7 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
       {required void Function(String) onChanged}) {
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
+          decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
         borderRadius: BorderRadius.circular(20),
       ),
@@ -2216,38 +2191,6 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
           border: InputBorder.none,
           hintText: 'Type here to edit...',
           contentPadding: EdgeInsets.zero,
-        ),
-      ),
-    );
-  }
-
-  // Legacy read-only card (kept for reference, no longer used)
-  Widget _buildTranscriptCard(BuildContext context, String text) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: SingleChildScrollView(
-        child: Text(text, style: const TextStyle(fontSize: 16, height: 1.5)),
-      ),
-    );
-  }
-
-  Widget _buildPolishedCard(BuildContext context, String text) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: SingleChildScrollView(
-        child: MarkdownBody(
-          data: text,
-          styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-            p: const TextStyle(fontSize: 16, height: 1.5),
-          ),
         ),
       ),
     );
@@ -3348,7 +3291,7 @@ class _SettingsPageState extends State<SettingsPage>
     bool obscure = true;
     String? error;
 
-    return showDialog<String>(
+    final String? result = await showDialog<String>(
       context: context,
       builder: (ctx) {
         return StatefulBuilder(
@@ -3409,6 +3352,8 @@ class _SettingsPageState extends State<SettingsPage>
         );
       },
     );
+    keyController.dispose();
+    return result;
   }
 
   // --- Floating dictation bubble settings ---
@@ -4343,80 +4288,6 @@ class TranscriptionService {
       'Fix grammar and sentence structure. Correct technical or phonetic errors. '
       'Keep the content and meaning exactly the same \u2014 do not add, remove, or rephrase substantive information. '
       'Do NOT use Markdown formatting. Output plain text only, with proper capitalization and punctuation.';
-
-  /// Main entry point: 3 API calls — Whisper STT → LLM Clean → LLM Polish (both with fallback).
-  Future<Map<String, String>> processNote(String audioPath) async {
-    final prefs = await SharedPreferences.getInstance();
-    final apiKey = prefs.getString('groq_api_key') ?? '';
-    final sttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
-    final bool enableTranslation = prefs.getBool('enable_translation') ?? false;
-    final String targetedLanguage = prefs.getString('target_language') ?? 'English';
-
-    if (apiKey.isEmpty) {
-      throw Exception('Groq API Key is not set. Please add it in Settings.');
-    }
-
-    // Stage 1: Whisper STT (API Call 1)
-    final rawTranscript = await _callWhisper(audioPath, apiKey, sttModel);
-
-    if (rawTranscript.trim().length < 3) {
-      return {
-        'rawTranscript': 'No speech detected.',
-        'raw_translated': '',
-        'cleanedTranscript': 'No speech detected.',
-        'cleaned_translated': '',
-        'polishedNote':
-            'No speech was detected in the recording. Please try again.',
-        'polished_translated': '',
-      };
-    }
-
-    // Track providers that fail during cleaning so they are not retried during
-    // polishing in the same note-processing session.
-    final Set<String> failedProviderIds = <String>{};
-
-    // Stage 2: LLM Clean (API Call 2) with automatic fallback
-    final cleanedResult = await _callLLMWithFallback(
-        rawTranscript,
-        systemPrompt: _cleanSystemPrompt,
-        onProviderFailed: (providerId) {
-          failedProviderIds.add(providerId);
-        });
-    final cleanedTranscript = cleanedResult.content;
-
-    // Stage 3: LLM Polish (API Call 3) — original, then translate if enabled.
-    // Prefer the provider that succeeded during cleaning instead of re-trying
-    // the primary provider that may have just failed. Skip providers that
-    // already failed during cleaning this session.
-    final polishedResult =
-        await _callLLMWithFallback(rawTranscript,
-            systemPrompt: _polishSystemPrompt,
-            preferredProviderId: cleanedResult.providerId,
-            skipProviderIds: failedProviderIds);
-    final polishedNote = polishedResult.content;
-
-    // Translation: keep originals, generate separate translated versions.
-    String rawTranslated = '';
-    String cleanedTranslated = '';
-    String polishedTranslated = '';
-
-    if (enableTranslation) {
-      rawTranslated = (await translate(rawTranscript, targetedLanguage)).content;
-      cleanedTranslated =
-          (await translate(cleanedTranscript, targetedLanguage)).content;
-      polishedTranslated =
-          (await translate(polishedNote, targetedLanguage)).content;
-    }
-
-    return {
-      'rawTranscript': rawTranscript,
-      'raw_translated': rawTranslated,
-      'cleanedTranscript': cleanedTranscript,
-      'cleaned_translated': cleanedTranslated,
-      'polishedNote': polishedNote,
-      'polished_translated': polishedTranslated,
-    };
-  }
 
   /// Stage 1 (public): Transcribe audio using Groq Whisper.
   Future<ProviderResult> transcribe(String audioPath) async {
