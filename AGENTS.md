@@ -55,10 +55,19 @@ format, and auto-inserts on ✓ — no preview step.
   draggable `TYPE_APPLICATION_OVERLAY` bubble. `isRunning` is the status shown in
   Settings; `showBubble(anchorBottom)` / `hideBubble()` are called by the
   accessibility service; `ensureRunning()` lets accessibility restart it.
+  It also owns the **dictation-active claim**: `beginDictation()` sets the
+  claim (before launching) and removes the bubble, `endDictation(generation)`
+  releases it, and `isDictationActive()` gates every bubble creation. This is a
+  flag, not focus inference, because the non-focusable sheet leaves input focus
+  (and the visible IME) with the app underneath — deriving "sheet is open" from
+  `rootInActiveWindow` made the bubble pop back over the visualizer.
 - `DictationAccessibilityService.kt` — watches focus/window events, finds the focused
   editable **non-password** node in an allow-listed package, hides the bubble in our
   own activity, and anchors the bubble above the IME (`TYPE_INPUT_METHOD` window top).
-  With no IME window visible the bubble stays hidden. `queueInsert(text)` waits
+  With no IME window visible the bubble stays hidden. `evaluateFocus()` bails out
+  (hiding, never showing) while `OverlayService.isDictationActive()`, and
+  `requestEvaluate()` is what restores the bubble after the sheet closes.
+  `queueInsert(text)` waits
   ~700 ms, focuses the field, tries `ACTION_PASTE`, verifies the text, then falls back
   to `ACTION_SET_TEXT` (append, caret at end) and finally a clipboard toast.
 - `OverlayDictationActivity.kt` — translucent `FlutterActivity` running the separate
@@ -66,7 +75,13 @@ format, and auto-inserts on ✓ — no preview step.
   `dictation_app/overlay_activity` exposes `insertText` (clipboard + queue paste),
   `copyText`, `accessibilityConnected`, and `close`. It deliberately does **not**
   finish inside `insertText`; Dart calls `close` so the target app regains focus
-  before the delayed paste.
+  before the delayed paste. Its window is **`FLAG_NOT_FOCUSABLE`** (set in
+  `onCreate`) with `SOFT_INPUT_STATE_UNCHANGED | SOFT_INPUT_ADJUST_NOTHING`:
+  a focusable activity window would become the IME target and make the keyboard
+  hide and reopen on every bubble tap, and FLAG_NOT_FOCUSABLE leaves focus/IME
+  with the app underneath while still delivering touch to the pill. Do not add
+  `FLAG_ALT_FOCUSABLE_IM` on top of it (that re-requests the IME target), and do
+  not drop NEW_TASK (a Service cannot start an activity without it).
 - `MainActivity.kt` — channel `dictation_app/overlay`: `getStatus`,
   `requestOverlayPermission`, `openAccessibilitySettings`, `startOverlay`,
   `stopOverlay`, `requestNotificationPermission`.

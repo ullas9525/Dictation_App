@@ -8,6 +8,7 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
@@ -49,6 +50,83 @@ class OverlayService : Service() {
         @Volatile
         var isRunning: Boolean = false
             private set
+
+        /**
+         * True from the moment the dictation sheet is launched until it is
+         * destroyed. This is the single source of truth for "the pill is on
+         * screen", and it must not be inferred from window focus: the sheet is
+         * `FLAG_NOT_FOCUSABLE`, so the input-focus owner stays the app
+         * underneath and accessibility still reports that app as active.
+         */
+        @Volatile
+        private var dictationActive: Boolean = false
+
+        @Volatile
+        private var dictationActiveSinceMs: Long = 0L
+
+        /**
+         * Monotonic owner token. An activity instance that is being replaced
+         * (rotate / re-create) must not clear the state that its successor has
+         * already claimed, so only the newest owner may end dictation.
+         */
+        @Volatile
+        private var dictationGeneration: Long = 0L
+
+        /**
+         * Safety net: if the sheet is destroyed without running its cleanup
+         * (process-level crash, OEM task killer), the bubble must not stay
+         * hidden forever. Generous enough for a long recording session.
+         */
+        private const val DICTATION_ACTIVE_TIMEOUT_MS = 15 * 60 * 1000L
+
+        fun isDictationActive(): Boolean {
+            if (!dictationActive) return false
+            val elapsed = SystemClock.elapsedRealtime() - dictationActiveSinceMs
+            if (elapsed > DICTATION_ACTIVE_TIMEOUT_MS) {
+                Log.w(
+                    "OverlayDebug",
+                    "dictationActive expired after ${elapsed}ms; assuming the sheet is gone",
+                )
+                dictationActive = false
+                return false
+            }
+            return true
+        }
+
+        /**
+         * Marks the sheet as on screen and removes the bubble in one step.
+         * Returns the generation token the caller must pass back to
+         * [endDictation] so a stale instance cannot clear a newer claim.
+         *
+         * Order matters: the flag is set *before* the launch, so an
+         * accessibility re-evaluation triggered by the activity window (or by
+         * the still-visible IME) can never recreate the bubble in the gap
+         * between hiding it and the activity actually starting.
+         */
+        fun beginDictation(): Long {
+            dictationGeneration += 1
+            dictationActiveSinceMs = SystemClock.elapsedRealtime()
+            dictationActive = true
+            Log.d("OverlayDebug", "dictation active: bubble hidden (gen=$dictationGeneration)")
+            instance?.hide()
+            return dictationGeneration
+        }
+
+        /** The sheet is gone: the bubble may be restored by the next evaluation. */
+        fun endDictation(generation: Long = -1L) {
+            if (!dictationActive) return
+            if (generation >= 0L && generation != dictationGeneration) {
+                Log.d(
+                    "OverlayDebug",
+                    "endDictation ignored: gen=$generation is not the owner " +
+                        "(current=$dictationGeneration)",
+                )
+                return
+            }
+            dictationActive = false
+            dictationActiveSinceMs = 0L
+            Log.d("OverlayDebug", "dictation inactive: bubble may be restored")
+        }
 
         @Volatile
         private var instance: OverlayService? = null
@@ -144,7 +222,26 @@ class OverlayService : Service() {
             stopSelf()
             return
         }
+        // The visualizer owns the screen while it is open. Remember the anchor
+        // so the bubble can come back afterwards, but never draw over the pill.
+        if (isDictationActive()) {
+            pendingAnchorBottom = anchorBottom
+            Log.d("OverlayDebug", "bubble show suppressed: visualizer is active")
+            hide()
+            return
+        }
         val wm = windowManager ?: return
+
+        // `bubbleVisible` can desync from reality if the system dropped the
+        // window (overlay permission revoked, display/rotation change). Trust
+        // the view, not the flag, so we never add a second bubble — and check
+        // this before the "same anchor" shortcut, or a removed view would be
+        // skipped forever.
+        if (bubbleVisible && bubbleView?.isAttachedToWindow != true) {
+            Log.w("OverlayDebug", "bubble was marked visible but is detached; re-adding")
+            bubbleVisible = false
+        }
+
         // Typing in the target app fires frequent content events. Repositioning
         // for an unchanged anchor would make the bubble jitter (and would fight
         // a drag), so only move when the keyboard/field boundary really moved.
@@ -158,8 +255,14 @@ class OverlayService : Service() {
             try {
                 wm.addView(view, params)
                 bubbleVisible = true
-            } catch (_: Exception) {
+                Log.d(
+                    "OverlayDebug",
+                    "bubble shown anchor=$anchorBottom y=${params.y} " +
+                        "attached=${view.isAttachedToWindow}",
+                )
+            } catch (t: Throwable) {
                 bubbleVisible = false
+                Log.e("OverlayDebug", "bubble addView failed", t)
                 return
             }
         }
@@ -180,14 +283,22 @@ class OverlayService : Service() {
     }
 
     private fun hide() {
-        val view = bubbleView ?: return
-        if (!bubbleVisible) return
-        try {
-            windowManager?.removeView(view)
-        } catch (_: Exception) {
-            // Already detached.
+        val view = bubbleView
+        val wasVisible = bubbleVisible || view?.isAttachedToWindow == true
+        if (view != null && wasVisible) {
+            try {
+                windowManager?.removeView(view)
+            } catch (_: Exception) {
+                // Already detached.
+            }
         }
         bubbleVisible = false
+        // A fresh show() must position itself for the anchor of the moment, so
+        // a restored bubble never reuses a stale keyboard position.
+        lastAnchorBottom = null
+        if (wasVisible) {
+            Log.d("OverlayDebug", "bubble hidden (view removed)")
+        }
     }
 
     private fun createBubbleView(): View {
@@ -263,7 +374,8 @@ class OverlayService : Service() {
                 MotionEvent.ACTION_UP -> {
                     Log.d("OverlayDebug", "bubble ACTION_UP dragging=$dragging")
                     if (!dragging) {
-                        hide()
+                        // beginDictation() inside openDictationActivity() hides
+                        // the bubble and sets the active flag before launching.
                         openDictationActivity()
                     }
                     isDragging = false
@@ -282,7 +394,10 @@ class OverlayService : Service() {
     }
 
     private fun openDictationActivity() {
-        Log.d("OverlayDebug", "openDictationActivity: launching OverlayDictationActivity")
+        // Claim the screen first: the accessibility service may re-evaluate in
+        // response to the new activity window or the still-visible IME, and
+        // from that moment on it must not put the bubble back.
+        beginDictation()
         val intent = Intent(this, OverlayDictationActivity::class.java)
             .addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -294,7 +409,10 @@ class OverlayService : Service() {
             Log.d("OverlayDebug", "openDictationActivity: startActivity ok")
         } catch (t: Throwable) {
             Log.e("OverlayDebug", "openDictationActivity: startActivity failed", t)
-            // No activity could be opened; leave the bubble available.
+            // No activity could be opened. Release the claim and put the
+            // bubble back immediately; otherwise it would stay hidden until
+            // the next focus change.
+            endDictation()
             pendingAnchorBottom?.let { show(it) }
         }
     }

@@ -36,7 +36,10 @@
 
         <!-- Translucent Flutter sheet that records, processes and previews the
              transcript before inserting it into the focused text field. It runs
-             the "overlayMain" Dart entrypoint instead of the full app. -->
+             the "overlayMain" Dart entrypoint instead of the full app.
+             stateUnchanged: never ask the IME to show or hide on entry.
+             adjustNothing: the pill positions itself, so a keyboard that stays
+             visible behind the sheet must not resize the window. -->
         <activity
             android:name=".OverlayDictationActivity"
             android:exported="false"
@@ -45,7 +48,7 @@
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:launchMode="singleTop"
-            android:windowSoftInputMode="stateUnchanged|adjustResize"
+            android:windowSoftInputMode="stateUnchanged|adjustNothing"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true" />
 

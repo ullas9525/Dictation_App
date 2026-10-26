@@ -116,13 +116,26 @@ class DictationAccessibilityService : AccessibilityService() {
     /**
      * Decides whether the bubble should be visible right now.
      *
-     * Own activity -> hidden (the sheet is already on screen). Target app with
-     * a focused editable field -> shown above the keyboard. Anything else ->
-     * hidden. [lastEditable] is intentionally kept when our own activity takes
-     * focus, because the paste happens after that activity closes.
+     * Dictation sheet open (see [OverlayService.isDictationActive]) -> hidden,
+     * regardless of the focused field or the visible keyboard underneath.
+     * Our own app on screen -> hidden (the sheet is already there). Target app
+     * with a focused editable field -> shown above the keyboard. Anything else
+     * -> hidden. [lastEditable] is intentionally kept when the sheet is open,
+     * because the paste happens after that activity closes.
      */
     private fun evaluateFocus() {
         if (!overlayEnabled()) {
+            OverlayService.hideBubble()
+            return
+        }
+
+        // The dictation sheet is on screen and owns the overlay slot. The
+        // focused field in the app underneath is still reported as focused
+        // (the sheet is FLAG_NOT_FOCUSABLE) and the IME is still visible, so
+        // the checks below would happily bring the bubble back on top of the
+        // visualizer. Never recreate it here; OverlayDictationActivity ends
+        // this state in onDestroy and then asks for one more evaluation.
+        if (OverlayService.isDictationActive()) {
             OverlayService.hideBubble()
             return
         }

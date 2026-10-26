@@ -229,9 +229,21 @@ findings above.
    sideloaded installs** (confirmed on a real device). Workaround: App info →
    ⋮ → "Allow restricted settings"; or install via `adb install`
    (adb installs are not restricted). OS policy — the app cannot clear it.
-5. **Activity-based capture can affect the keyboard.** Tapping the bubble opens
-   a translucent Flutter activity; some keyboards/apps may hide and reopen the
-   IME. This is a manual-test item on WhatsApp/Gboard.
+5. **Activity-based capture and the keyboard.** Tapping the bubble opens a
+   translucent Flutter activity. Its window is now `FLAG_NOT_FOCUSABLE` with
+   `SOFT_INPUT_STATE_UNCHANGED | SOFT_INPUT_ADJUST_NOTHING`, so it should no
+   longer become the IME target and make the keyboard hide/reopen; the target
+   app is still paused by the task switch, so an OEM keyboard that hides on
+   pause can still misbehave. Verify on Gboard + WhatsApp before calling it
+   closed. Hardware back now reaches the app underneath (by design — the pill
+   has ✕ / Close).
+   Because that window is not focusable, the field underneath stays "focused"
+   and the IME stays visible, so bubble visibility can no longer be derived
+   from focus: `OverlayService.beginDictation()` / `endDictation()` own a
+   dictation-active claim that suppresses bubble creation while the sheet is
+   open. A 15-minute watchdog releases the claim if the sheet dies without
+   running `onDestroy` (crash / OEM kill), so the bubble cannot stay hidden
+   forever after an abnormally long session either.
 6. **Insertion is best-effort.** It uses `ACTION_PASTE` and falls back to
    splicing via `ACTION_SET_TEXT`. Custom web views / non-standard editors may
    refuse both; the text is left on the clipboard.
