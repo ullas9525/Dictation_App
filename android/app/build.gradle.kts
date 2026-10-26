@@ -30,7 +30,7 @@ android {
 
     defaultConfig {
         // Unique application ID — change before publishing.
-        applicationId = "com.muddu.dictation_app"
+        applicationId = "com.example.dictation_app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -71,7 +71,7 @@ android {
             if (!rootProject.file("key.properties").exists()) {
                 throw GradleException(
                     "Release signing credentials not found. Create android/key.properties " +
-                    "with storeFile, storePassword, keyAlias, and keyPassword before building a release."
+                    "with storeFile, storePassword, keyAlias, and keyPassword before building a release.",
                 )
             }
         }

@@ -41,7 +41,7 @@
             android:name=".OverlayDictationActivity"
             android:exported="false"
             android:theme="@style/OverlayDialogTheme"
-            android:taskAffinity="com.example.dictation_app.overlay"
+            android:taskAffinity="com.example.dictation_app"
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:launchMode="singleTop"

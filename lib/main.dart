@@ -3391,6 +3391,7 @@ class _SettingsPageState extends State<SettingsPage>
               ),
             )
           else if (_overlayEnabled) ...[
+            _buildOverlaySetupChecklist(),
             const Divider(),
             _buildOverlayStatusRow(
               icon: Icons.layers_outlined,
@@ -3534,6 +3535,93 @@ class _SettingsPageState extends State<SettingsPage>
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOverlaySetupChecklist() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        const SizedBox(height: 10),
+        const Text(
+          'Setup checklist',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+        ),
+        const SizedBox(height: 8),
+        _buildOverlayChecklistTile(
+          icon: Icons.layers_outlined,
+          title: 'Display over other apps',
+          reason:
+              'Required so the mic bubble can draw over other apps (for example WhatsApp) instead of inside the keyboard.',
+          actionLabel: 'Open settings',
+          onAction: _openOverlayPermission,
+        ),
+        _buildOverlayChecklistTile(
+          icon: Icons.accessibility_new,
+          title: 'Dictation bubble accessibility service',
+          reason:
+              'Required to detect the focused text field and paste the transcript. It never stores screen content.',
+          actionLabel: 'Open accessibility',
+          onAction: _openAccessibilitySettings,
+        ),
+        _buildOverlayChecklistTile(
+          icon: Icons.notifications_outlined,
+          title: 'Notifications',
+          reason:
+              'Required for the dictation foreground service on Android 13 and newer.',
+          actionLabel: 'Grant',
+          onAction: () async {
+            await OverlayBridge.requestNotificationPermission();
+            await _refreshOverlayStatus();
+          },
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Some steps must be completed manually. Settings names can vary by Android version or device manufacturer.',
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildOverlayChecklistTile({
+    required IconData icon,
+    required String title,
+    required String reason,
+    required Future<void> Function() onAction,
+    String actionLabel = 'Open settings',
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Icon(icon, size: 20, color: Colors.orange.shade800),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  title,
+                  style:
+                      const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  reason,
+                  style: TextStyle(
+                      fontSize: 12, color: Colors.grey.shade700),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: _overlayBusy ? null : () => onAction(),
+            child: Text(actionLabel),
+          ),
         ],
       ),
     );

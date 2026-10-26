@@ -13,6 +13,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.util.Log
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -229,6 +230,7 @@ class OverlayService : Service() {
             val params = bubbleParams ?: return@OnTouchListener false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    Log.d("OverlayDebug", "bubble ACTION_DOWN x=${event.x} y=${event.y}")
                     startX = params.x
                     startY = params.y
                     downRawX = event.rawX
@@ -259,6 +261,7 @@ class OverlayService : Service() {
                 }
 
                 MotionEvent.ACTION_UP -> {
+                    Log.d("OverlayDebug", "bubble ACTION_UP dragging=$dragging")
                     if (!dragging) {
                         hide()
                         openDictationActivity()
@@ -279,6 +282,7 @@ class OverlayService : Service() {
     }
 
     private fun openDictationActivity() {
+        Log.d("OverlayDebug", "openDictationActivity: launching OverlayDictationActivity")
         val intent = Intent(this, OverlayDictationActivity::class.java)
             .addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -287,7 +291,9 @@ class OverlayService : Service() {
             )
         try {
             startActivity(intent)
-        } catch (_: Exception) {
+            Log.d("OverlayDebug", "openDictationActivity: startActivity ok")
+        } catch (t: Throwable) {
+            Log.e("OverlayDebug", "openDictationActivity: startActivity failed", t)
             // No activity could be opened; leave the bubble available.
             pendingAnchorBottom?.let { show(it) }
         }

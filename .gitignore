@@ -89,3 +89,8 @@ ios/Flutter/flutter_export_environment.sh
 node_modules/
 dist/
 
+# Android release signing credentials
+/android/key.properties
+/upload-keystore.jks
+*.jks
+*.keystore
