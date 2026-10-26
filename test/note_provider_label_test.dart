@@ -76,6 +76,60 @@ void main() {
     });
   });
 
+  group('NoteProvider stores translated transcripts', () {
+    test('updateTranscripts records translated versions of all three stages',
+        () {
+      final NoteProvider provider = NoteProvider()
+        ..updateTranscripts(<String, String>{
+          'rawTranscript': 'Hello',
+          'raw_translated': 'नमस्ते',
+          'cleanedTranscript': 'Hello there.',
+          'cleaned_translated': 'नमस्ते वहाँ।',
+          'polishedNote': '# Greeting',
+          'polished_translated': '# अभिवादन',
+        });
+
+      expect(provider.rawTranscriptTranslated, 'नमस्ते');
+      expect(provider.cleanedTranscriptTranslated, 'नमस्ते वहाँ।');
+      expect(provider.polishedTranscriptTranslated, '# अभिवादन');
+    });
+
+    test('translated fields are empty when not provided in the map', () {
+      final NoteProvider provider = NoteProvider()
+        ..updateTranscripts(<String, String>{
+          'rawTranscript': 'Hello',
+          'cleanedTranscript': 'Hello there.',
+          'polishedNote': '# Greeting',
+        });
+
+      expect(provider.rawTranscriptTranslated, '');
+      expect(provider.cleanedTranscriptTranslated, '');
+      expect(provider.polishedTranscriptTranslated, '');
+    });
+
+    test('original and translated transcripts remain independent', () {
+      final NoteProvider provider = NoteProvider()
+        ..updateTranscripts(<String, String>{
+          'rawTranscript': 'Original English',
+          'raw_translated': 'मूल अंग्रेजी',
+          'cleanedTranscript': 'Original English.',
+          'cleaned_translated': 'मूल अंग्रेजी।',
+          'polishedNote': '# Original',
+          'polished_translated': '# मूल',
+        });
+
+      // Originals are unchanged.
+      expect(provider.rawTranscript, 'Original English');
+      expect(provider.cleanedTranscript, 'Original English.');
+      expect(provider.polishedTranscript, '# Original');
+
+      // Translated versions are separate.
+      expect(provider.rawTranscriptTranslated, 'मूल अंग्रेजी');
+      expect(provider.cleanedTranscriptTranslated, 'मूल अंग्रेजी।');
+      expect(provider.polishedTranscriptTranslated, '# मूल');
+    });
+  });
+
   group('NotePage shows the label above the Copy / Edit buttons', () {
     Future<void> pumpNotePage(WidgetTester tester, NoteProvider provider) async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -136,6 +190,158 @@ void main() {
       await pumpNotePage(tester, NoteProvider());
       expect(find.textContaining('Provider:'), findsNothing);
       expect(find.textContaining('Model:'), findsNothing);
+    });
+  });
+
+  group('KI-06: ProviderResult carries providerId', () {
+    test('providerId is set alongside providerName and model', () {
+      final result = ProviderResult(
+        content: 'note',
+        providerName: 'Gemini',
+        providerId: 'gemini',
+        model: 'gemini-2.5-flash',
+      );
+      expect(result.providerId, 'gemini');
+      expect(result.providerName, 'Gemini');
+      expect(result.model, 'gemini-2.5-flash');
+    });
+
+    test('providerId defaults to empty string', () {
+      final result = ProviderResult(content: 'note');
+      expect(result.providerId, '');
+    });
+  });
+
+  group('KI-01: NoteProvider translated update methods', () {
+    test('updateRawTranscriptTranslated stores translated raw text separately',
+        () {
+      final provider = NoteProvider()
+        ..updateRawTranscript('Hello')
+        ..updateRawTranscriptTranslated('नमस्ते');
+
+      expect(provider.rawTranscript, 'Hello');
+      expect(provider.rawTranscriptTranslated, 'नमस्ते');
+    });
+
+    test('updateCleanedTranscriptTranslated stores translated cleaned text',
+        () {
+      final provider = NoteProvider()
+        ..updateCleanedTranscript('Hello there.')
+        ..updateCleanedTranscriptTranslated('नमस्ते वहाँ।');
+
+      expect(provider.cleanedTranscript, 'Hello there.');
+      expect(provider.cleanedTranscriptTranslated, 'नमस्ते वहाँ।');
+    });
+
+    test('updatePolishedNoteTranslated stores translated polished text', () {
+      final provider = NoteProvider()
+        ..updatePolishedNote('# Title')
+        ..updatePolishedNoteTranslated('# शीर्षक');
+
+      expect(provider.polishedTranscript, '# Title');
+      expect(provider.polishedTranscriptTranslated, '# शीर्षक');
+    });
+
+    test('updating translated text does not change the original', () {
+      final provider = NoteProvider()
+        ..updateRawTranscript('Original English')
+        ..updateRawTranscriptTranslated('मूल अंग्रेजी');
+
+      expect(provider.rawTranscript, 'Original English');
+      expect(provider.rawTranscriptTranslated, 'मूल अंग्रेजी');
+
+      // Change the translated version
+      provider.updateRawTranscriptTranslated('नया अनुवाद');
+
+      // Original is unchanged
+      expect(provider.rawTranscript, 'Original English');
+      expect(provider.rawTranscriptTranslated, 'नया अनुवाद');
+    });
+
+    test('updating original text does not change the translation', () {
+      final provider = NoteProvider()
+        ..updateRawTranscript('Original English')
+        ..updateRawTranscriptTranslated('मूल अंग्रेजी');
+
+      // Change the original
+      provider.updateRawTranscript('New English');
+
+      expect(provider.rawTranscript, 'New English');
+      expect(provider.rawTranscriptTranslated, 'मूल अंग्रेजी');
+    });
+  });
+
+  group('KI-01: NotePage Original/Translated switch', () {
+    NoteProvider populatedWithTranslation() => NoteProvider()
+      ..updateTranscripts(<String, String>{
+        'rawTranscript': 'Hello',
+        'raw_translated': 'नमस्ते',
+        'cleanedTranscript': 'Hello there.',
+        'cleaned_translated': 'नमस्ते वहाँ।',
+        'polishedNote': '# Title',
+        'polished_translated': '# शीर्षक',
+        'rawProvider': 'Groq',
+        'rawModel': 'whisper-large-v3',
+        'cleanedProvider': 'OpenRouter',
+        'cleanedModel': 'meta-llama/llama-3.2-3b-instruct:free',
+        'polishedProvider': 'Gemini',
+        'polishedModel': 'gemini-2.5-flash',
+      });
+
+    testWidgets('displays original text when switch is off', (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      await tester.pumpWidget(
+        ChangeNotifierProvider<NoteProvider>.value(
+          value: populatedWithTranslation(),
+          child: const MaterialApp(home: NotePage()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Raw tab shows original by default
+      expect(find.text('Hello'), findsOneWidget);
+      expect(find.text('नमस्ते'), findsNothing);
+    });
+
+    testWidgets('displays translated text when switch is on', (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      await tester.pumpWidget(
+        ChangeNotifierProvider<NoteProvider>.value(
+          value: populatedWithTranslation(),
+          child: const MaterialApp(home: NotePage()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Turn on translation
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+
+      expect(find.text('नमस्ते'), findsOneWidget);
+      expect(find.text('Hello'), findsNothing);
+    });
+
+    testWidgets('switching back to original restores original text',
+        (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      await tester.pumpWidget(
+        ChangeNotifierProvider<NoteProvider>.value(
+          value: populatedWithTranslation(),
+          child: const MaterialApp(home: NotePage()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Turn on translation
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+      expect(find.text('नमस्ते'), findsOneWidget);
+
+      // Turn off translation
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+      expect(find.text('Hello'), findsOneWidget);
+      expect(find.text('नमस्ते'), findsNothing);
     });
   });
 }

@@ -374,6 +374,27 @@ class NoteProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Updates the translated version of the raw transcript.
+  void updateRawTranscriptTranslated(String value) {
+    _rawTranscriptTranslated = value;
+    notifyListeners();
+  }
+
+  /// Updates the translated version of the cleaned transcript.
+  void updateCleanedTranscriptTranslated(String value) {
+    _cleanedTranscriptTranslated = value;
+    notifyListeners();
+  }
+
+  /// Updates the translated version of the polished note.
+  void updatePolishedNoteTranslated(String newNote,
+      {String? providerName, String? model}) {
+    _polishedTranscriptTranslated = newNote;
+    if (providerName != null) _polishedProviderName = providerName;
+    if (model != null) _polishedModel = model;
+    notifyListeners();
+  }
+
   void updateTranscripts(Map<String, String> transcripts) {
     // Update original transcripts
     _rawTranscript = transcripts['rawTranscript'] ?? 'No raw transcript available.';
@@ -1805,15 +1826,39 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                     children: [
                       // Tab 0: Raw Transcript
                       _isEditing
-                          ? _buildEditableCard(context, _rawController, onChanged: (v) { _lastRaw = v; noteProvider.updateRawTranscript(v); })
+                          ? _buildEditableCard(context, _rawController,
+                              onChanged: (v) {
+                                _lastRaw = v;
+                                if (_showTranslated) {
+                                  noteProvider.updateRawTranscriptTranslated(v);
+                                } else {
+                                  noteProvider.updateRawTranscript(v);
+                                }
+                              })
                           : _buildReadCard(context, _rawController.text, isMarkdown: false),
                       // Tab 1: Cleaned
                       _isEditing
-                          ? _buildEditableCard(context, _cleanedController, onChanged: (v) { _lastCleaned = v; noteProvider.updateCleanedTranscript(v); })
+                          ? _buildEditableCard(context, _cleanedController,
+                              onChanged: (v) {
+                                _lastCleaned = v;
+                                if (_showTranslated) {
+                                  noteProvider.updateCleanedTranscriptTranslated(v);
+                                } else {
+                                  noteProvider.updateCleanedTranscript(v);
+                                }
+                              })
                           : _buildReadCard(context, _cleanedController.text, isMarkdown: false),
                       // Tab 2: Polished Note (Markdown rendered)
                       _isEditing
-                          ? _buildEditableCard(context, _polishedController, onChanged: (v) { _lastPolished = v; noteProvider.updatePolishedNote(v); })
+                          ? _buildEditableCard(context, _polishedController,
+                              onChanged: (v) {
+                                _lastPolished = v;
+                                if (_showTranslated) {
+                                  noteProvider.updatePolishedNoteTranslated(v);
+                                } else {
+                                  noteProvider.updatePolishedNote(v);
+                                }
+                              })
                           : _buildReadCard(context, _polishedController.text, isMarkdown: true),
                     ],
                   ),
@@ -1831,16 +1876,20 @@ class _NotePageState extends State<NotePage> with SingleTickerProviderStateMixin
                           onPressed: () {
                             final tab = _tabController.index;
                             String text = tab == 0
-                                ? noteProvider.rawTranscript
+                                ? (_showTranslated
+                                    ? noteProvider.rawTranscriptTranslated
+                                    : noteProvider.rawTranscript)
                                 : tab == 1
-                                    ? noteProvider.cleanedTranscript
-                                    : noteProvider.polishedTranscript;
-                            
-                            // Strip markdown and formatting symbols from Polished Note
-                            if (tab == 2) {
-                              text = text.replaceAll(RegExp(r'[*#_`/\\]'), '');
-                              text = text.replaceAll(RegExp(r'^\s*-\s*', multiLine: true), '');
-                            }
+                                    ? (_showTranslated
+                                        ? noteProvider.cleanedTranscriptTranslated
+                                        : noteProvider.cleanedTranscript)
+                                    : (_showTranslated
+                                        ? noteProvider.polishedTranscriptTranslated
+                                        : noteProvider.polishedTranscript);
+
+                            // Strip markdown and formatting symbols so only the
+                            // spoken content is pasted.
+                            text = _stripMarkdown(text);
 
                             Clipboard.setData(ClipboardData(text: text));
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -2224,11 +2273,15 @@ class _TranscribePageState extends State<TranscribePage> {
   List<String> _retryOptions = <String>[];
   String _selectedRetryOption = '';
 
-  // Results of stages that already succeeded. Groq transcription is never
-  // repeated: once the audio has been transcribed, a retry only re-runs the
-  // LLM stage against a different provider/model.
+// Results of stages that already succeeded. Groq transcription is never
+// repeated: once the audio has been transcribed, a retry only re-runs the
+// LLM stage against a different provider/model.
   ProviderResult? _sttResult;
   ProviderResult? _cleanedResult;
+
+  // Provider IDs that failed during the current note-processing session.
+  // Scoped to this session only — reset on each new _startProcessing call.
+  final Set<String> _failedProviderIds = <String>{};
 
   @override
   void initState() {
@@ -2238,6 +2291,7 @@ class _TranscribePageState extends State<TranscribePage> {
 
   Future<void> _startProcessing() async {
     if (!mounted) return;
+    _failedProviderIds.clear();
     setState(() {
       _isProcessing = true;
       _errorMessage = '';
@@ -2259,11 +2313,39 @@ class _TranscribePageState extends State<TranscribePage> {
       if (!mounted) return;
       setState(() => _currentStep = ProcessingStep.processing);
       final ProviderResult cleanedResult =
-          _cleanedResult ?? await service.clean(rawTranscript);
+          _cleanedResult ?? await service.clean(rawTranscript,
+          onProviderFailed: (providerId) {
+            _failedProviderIds.add(providerId);
+          });
       _cleanedResult = cleanedResult;
 
-      // Stage 3: LLM Polish — shown as "Processing" (continues)
-      final ProviderResult polishedResult = await service.polish(rawTranscript);
+      // Stage 3: LLM Polish — shown as "Processing" (continues).
+      // Prefer the provider that just succeeded during cleaning, then fall back.
+      // Skip providers that already failed during cleaning this session.
+      final ProviderResult polishedResult = await service.polish(
+        rawTranscript,
+        preferredProviderId: cleanedResult.providerId,
+        skipProviderIds: _failedProviderIds,
+      );
+
+      // Translation: keep originals, generate separate translated versions.
+      String? rawTranslated, cleanedTranslated, polishedTranslated;
+      if (mounted) {
+        final tPrefs = await SharedPreferences.getInstance();
+        final bool translate = tPrefs.getBool('enable_translation') ?? false;
+        final String targetedLanguage =
+            tPrefs.getString('target_language') ?? 'English';
+        if (translate) {
+          rawTranslated =
+              (await service.translate(rawTranscript, targetedLanguage)).content;
+          cleanedTranslated =
+              (await service.translate(cleanedResult.content, targetedLanguage))
+                  .content;
+          polishedTranslated =
+              (await service.translate(polishedResult.content, targetedLanguage))
+                  .content;
+        }
+      }
 
       // Stage 4: Done — shown as "Downloading" briefly
       if (!mounted) return;
@@ -2275,12 +2357,15 @@ class _TranscribePageState extends State<TranscribePage> {
           'rawTranscript': rawTranscript,
           'rawProvider': sttResult.providerName,
           'rawModel': sttResult.model,
+          'raw_translated': rawTranslated ?? '',
           'cleanedTranscript': cleanedResult.content,
           'cleanedProvider': cleanedResult.providerName,
           'cleanedModel': cleanedResult.model,
+          'cleaned_translated': cleanedTranslated ?? '',
           'polishedNote': polishedResult.content,
           'polishedProvider': polishedResult.providerName,
           'polishedModel': polishedResult.model,
+          'polished_translated': polishedTranslated ?? '',
         });
       }
     } catch (e) {
@@ -2354,7 +2439,12 @@ class _TranscribePageState extends State<TranscribePage> {
                     children: [
                       const AiBrainAnimation(),
                       const SizedBox(height: 24),
-                      ProcessingStepper(currentStep: _currentStep),
+                      ProcessingStepper(
+                        currentStep: _currentStep,
+                        transcriptionLabel: _currentStep == ProcessingStep.processing
+                            ? 'AI is busy processing...'
+                            : '',
+                      ),
                       const SizedBox(height: 24),
                       const Text(
                         'Your voice note is being processed. This might take a few moments.',
@@ -2518,9 +2608,9 @@ class ProcessingStepper extends StatelessWidget {
     if (isCompleted) {
       child = const Icon(Icons.check, color: Colors.white, size: 16);
     } else if (isCurrent) {
-      // Determine color: Amber if busy/waiting, Green if processing
+      // Determine color: use grey for waiting/rotating indicator to match first/last states
       final bool isWaiting = transcriptionLabel.toLowerCase().contains('busy');
-      final Color indicatorColor = isWaiting ? Colors.amber : Colors.green.shade700;
+      final Color indicatorColor = isWaiting ? Colors.grey.shade400 : Colors.green.shade700;
       
       // Show a determinate progress indicator for the current step
       child = Padding(
@@ -3764,11 +3854,8 @@ class _SettingsPageState extends State<SettingsPage>
     final List<String> initialModels = (existing?.models ?? defaultPreset.models)
         .where((String m) => m.trim().isNotEmpty)
         .toList();
-    // A provider with no model list yet (a hand-typed custom one) has nothing to
-    // pick from, so that single model is typed once instead.
-    final bool needsCustomModel = initialModels.isEmpty;
     final TextEditingController modelsController = TextEditingController(
-        text: needsCustomModel ? (existing?.model ?? '') : initialModels.join(', '));
+        text: initialModels.isEmpty ? (existing?.model ?? '') : initialModels.join(', '));
     String selectedModel = existing?.model ??
         (initialModels.isNotEmpty ? initialModels.first : '');
     // The full model list stays out of the initial view — it is revealed with
@@ -3790,6 +3877,15 @@ class _SettingsPageState extends State<SettingsPage>
             if (selectedModel.isEmpty && availableModels.isNotEmpty) {
               selectedModel = availableModels.first;
             }
+            // Recompute on every rebuild so switching presets (e.g. to Custom)
+            // immediately shows the right model-entry field.
+            final bool needsCustomModel = ProviderRegistry.presets
+                .firstWhere(
+                  (ProviderPreset p) => p.name == selectedPreset,
+                  orElse: () => ProviderPreset('', '', const <String>[]),
+                )
+                .models
+                .isEmpty;
 
             /// Edit mode saves every valid change as it is made — no save button.
             void autoApply() {
@@ -4208,11 +4304,13 @@ class _SettingsPageState extends State<SettingsPage>
 class ProviderResult {
   final String content;
   final String providerName; // e.g. "Groq", "OpenRouter", "Gemini"
+  final String providerId;   // e.g. "openrouter", "gemini", "groq" — the actual registry ID
   final String model;        // e.g. "whisper-large-v3", "meta-llama/...:free"
 
   const ProviderResult({
     required this.content,
     this.providerName = '',
+    this.providerId = '',
     this.model = '',
   });
 
@@ -4251,6 +4349,8 @@ class TranscriptionService {
     final prefs = await SharedPreferences.getInstance();
     final apiKey = prefs.getString('groq_api_key') ?? '';
     final sttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
+    final bool enableTranslation = prefs.getBool('enable_translation') ?? false;
+    final String targetedLanguage = prefs.getString('target_language') ?? 'English';
 
     if (apiKey.isEmpty) {
       throw Exception('Groq API Key is not set. Please add it in Settings.');
@@ -4262,22 +4362,59 @@ class TranscriptionService {
     if (rawTranscript.trim().length < 3) {
       return {
         'rawTranscript': 'No speech detected.',
+        'raw_translated': '',
         'cleanedTranscript': 'No speech detected.',
-        'polishedNote': 'No speech was detected in the recording. Please try again.',
+        'cleaned_translated': '',
+        'polishedNote':
+            'No speech was detected in the recording. Please try again.',
+        'polished_translated': '',
       };
     }
 
-    // Stage 2: LLM Clean (API Call 2) with automatic fallback
-    final cleanedTranscript =
-        (await _callLLMWithFallback(rawTranscript, systemPrompt: _cleanSystemPrompt)).content;
+    // Track providers that fail during cleaning so they are not retried during
+    // polishing in the same note-processing session.
+    final Set<String> failedProviderIds = <String>{};
 
-    // Stage 3: LLM Polish (API Call 3) with automatic fallback
-    final polishedNote = (await _callLLMWithFallback(rawTranscript)).content;
+    // Stage 2: LLM Clean (API Call 2) with automatic fallback
+    final cleanedResult = await _callLLMWithFallback(
+        rawTranscript,
+        systemPrompt: _cleanSystemPrompt,
+        onProviderFailed: (providerId) {
+          failedProviderIds.add(providerId);
+        });
+    final cleanedTranscript = cleanedResult.content;
+
+    // Stage 3: LLM Polish (API Call 3) — original, then translate if enabled.
+    // Prefer the provider that succeeded during cleaning instead of re-trying
+    // the primary provider that may have just failed. Skip providers that
+    // already failed during cleaning this session.
+    final polishedResult =
+        await _callLLMWithFallback(rawTranscript,
+            systemPrompt: _polishSystemPrompt,
+            preferredProviderId: cleanedResult.providerId,
+            skipProviderIds: failedProviderIds);
+    final polishedNote = polishedResult.content;
+
+    // Translation: keep originals, generate separate translated versions.
+    String rawTranslated = '';
+    String cleanedTranslated = '';
+    String polishedTranslated = '';
+
+    if (enableTranslation) {
+      rawTranslated = (await translate(rawTranscript, targetedLanguage)).content;
+      cleanedTranslated =
+          (await translate(cleanedTranscript, targetedLanguage)).content;
+      polishedTranslated =
+          (await translate(polishedNote, targetedLanguage)).content;
+    }
 
     return {
       'rawTranscript': rawTranscript,
+      'raw_translated': rawTranslated,
       'cleanedTranscript': cleanedTranscript,
+      'cleaned_translated': cleanedTranslated,
       'polishedNote': polishedNote,
+      'polished_translated': polishedTranslated,
     };
   }
 
@@ -4288,24 +4425,53 @@ class TranscriptionService {
     final sttModel = prefs.getString('groq_stt_model') ?? 'whisper-large-v3';
     if (apiKey.isEmpty) throw Exception('Groq API Key is not set. Please add it in Settings.');
     final String text = await _callWhisper(audioPath, apiKey, sttModel);
-    return ProviderResult(content: text, providerName: 'Groq', model: sttModel);
+    return ProviderResult(content: text, providerName: 'Groq', providerId: 'groq', model: sttModel);
   }
 
   /// Stage 2 (public): Clean transcript via LLM — remove fillers, fix grammar.
-  Future<ProviderResult> clean(String rawTranscript) async {
+  Future<ProviderResult> clean(String rawTranscript,
+      {String? preferredProviderId,
+      Set<String>? skipProviderIds,
+      void Function(String providerId)? onProviderFailed}) async {
     if (rawTranscript.trim().length < 3) {
       return ProviderResult(content: rawTranscript);
     }
-    return _callLLMWithFallback(rawTranscript, systemPrompt: _cleanSystemPrompt);
+    return _callLLMWithFallback(rawTranscript,
+        systemPrompt: _cleanSystemPrompt,
+        preferredProviderId: preferredProviderId,
+        skipProviderIds: skipProviderIds,
+        onProviderFailed: onProviderFailed);
   }
 
   /// Stage 3 (public): Polish transcript with auto-fallback between LLM providers.
-  Future<ProviderResult> polish(String rawTranscript) async {
+  /// Produces the original (non-translated) polished note. Call [translate]
+  /// separately when translation is enabled.
+  Future<ProviderResult> polish(String rawTranscript,
+      {String? preferredProviderId,
+      Set<String>? skipProviderIds,
+      void Function(String providerId)? onProviderFailed}) async {
     if (rawTranscript.trim().length < 3) {
       return const ProviderResult(
           content: 'No speech was detected in the recording. Please try again.');
     }
-    return _callLLMWithFallback(rawTranscript);
+    return _callLLMWithFallback(rawTranscript,
+        systemPrompt: _polishSystemPrompt,
+        preferredProviderId: preferredProviderId,
+        skipProviderIds: skipProviderIds,
+        onProviderFailed: onProviderFailed);
+  }
+
+  /// Translates text into the target language using the LLM fallback chain.
+  /// Returns a [ProviderResult] whose [content] is the translated text.
+  Future<ProviderResult> translate(String text, String targetLanguage) async {
+    if (text.trim().isEmpty) {
+      return const ProviderResult(content: '');
+    }
+    return _callLLMWithFallback(
+      text,
+      systemPrompt:
+          'Translate the following text into $targetLanguage. Output only the translated text, with no preamble, explanation, or markdown formatting.',
+    );
   }
 
   Future<String> _callWhisper(String audioPath, String apiKey, String sttModel) async {
@@ -4452,19 +4618,27 @@ class TranscriptionService {
 
   /// Shared fallback loop. Every recoverable provider error moves to the next
   /// provider. Non-recoverable errors stop immediately. When every attempt
-  /// fails, all attempts are reported together.
+  /// fails, all attempts are reported together. Providers whose IDs are in
+  /// [skipProviderIds] are skipped entirely (used to avoid re-trying providers
+  /// that already failed during an earlier stage of the same session).
   Future<ProviderResult> _runProviderChain(
     List<LlmProvider> attempts,
     Future<String> Function(LlmProvider provider) call, {
     String Function(LlmProvider provider)? modelFor,
+    Set<String>? skipProviderIds,
+    void Function(String providerId)? onProviderFailed,
   }) async {
     final List<String> failures = <String>[];
     for (final LlmProvider provider in attempts) {
+      if (skipProviderIds != null && skipProviderIds.contains(provider.id)) {
+        continue;
+      }
       try {
         final String content = await call(provider);
         return ProviderResult(
           content: content,
           providerName: provider.name,
+          providerId: provider.id,
           model: (modelFor ?? (LlmProvider p) => p.model)(provider),
         );
       } catch (e) {
@@ -4474,6 +4648,7 @@ class TranscriptionService {
         // is an aggregated, per-provider error shown to the user.
         failures.add(TranscriptionService.providerFailureLine(
             provider.name, provider.model, e));
+        onProviderFailed?.call(provider.id);
       }
     }
 
@@ -4483,8 +4658,16 @@ class TranscriptionService {
 
   /// Tries the primary provider first, then every other connected provider
   /// (Gemini, OpenRouter, or anything added later with "+") until one succeeds.
+  /// When [preferredProviderId] is given and the provider is configured, it is
+  /// tried first — so a provider that already succeeded in an earlier stage of
+  /// the same session (e.g. cleaning) is preferred for the next stage (e.g.
+  /// polishing) instead of re-trying the primary provider that just failed.
+  /// Providers in [skipProviderIds] are skipped entirely.
   Future<ProviderResult> _callLLMWithFallback(String transcript,
-      {String? systemPrompt}) async {
+      {String? systemPrompt,
+      String? preferredProviderId,
+      Set<String>? skipProviderIds,
+      void Function(String providerId)? onProviderFailed}) async {
     final prefs = await SharedPreferences.getInstance();
     final List<LlmProvider> all = await ProviderRegistry.load(prefs);
     final String primaryId = prefs.getString('primary_provider_id') ?? '';
@@ -4492,6 +4675,21 @@ class TranscriptionService {
         ProviderRegistry.orderedForFallback(all, primaryId)
             .where((LlmProvider p) => p.isConfigured)
             .toList();
+
+    // Remove providers that should be skipped (e.g. already failed this session).
+    if (skipProviderIds != null && skipProviderIds.isNotEmpty) {
+      providers.removeWhere((LlmProvider p) => skipProviderIds.contains(p.id));
+    }
+
+    // Move the preferred provider (if configured) to the front of the list.
+    if (preferredProviderId != null && preferredProviderId.isNotEmpty) {
+      final preferredIndex =
+          providers.indexWhere((LlmProvider p) => p.id == preferredProviderId);
+      if (preferredIndex >= 0) {
+        final preferred = providers.removeAt(preferredIndex);
+        providers.insert(0, preferred);
+      }
+    }
 
     if (providers.isEmpty) {
       throw Exception(
@@ -4502,6 +4700,8 @@ class TranscriptionService {
       providers,
       (LlmProvider provider) =>
           _callProvider(provider, transcript, systemPrompt: systemPrompt),
+      skipProviderIds: skipProviderIds,
+      onProviderFailed: onProviderFailed,
     );
   }
 }

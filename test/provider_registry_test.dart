@@ -223,4 +223,50 @@ void main() {
     });
   });
 
+  group('KI-03: Custom provider creation form', () {
+    test('the Custom preset has no models, so the form shows a text field',
+        () {
+      final custom = ProviderRegistry.presets.firstWhere(
+        (ProviderPreset p) => p.name == 'Custom',
+      );
+      expect(custom.models, isEmpty);
+    });
+
+    test('predefined presets have models, so the form shows a dropdown', () {
+      for (final preset in ProviderRegistry.presets) {
+        if (preset.name == 'Custom') continue;
+        expect(preset.models, isNotEmpty,
+            reason: '$preset should offer models for the dropdown');
+      }
+    });
+  });
+
+  group('KI-06: Legacy processNote failure tracking', () {
+    test('clean and polish accept preferredProviderId, skipProviderIds, and onProviderFailed', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final service = TranscriptionService();
+      final Set<String> skipped = <String>{'provider_a'};
+      // Verify the method signatures accept the new parameters by checking
+      // they throw the expected "no provider configured" error (not a
+      // parameter/type error).
+      expect(
+        () async => await service.clean('hello', preferredProviderId: 'provider_b', skipProviderIds: skipped),
+        throwsA(isA<Exception>()),
+      );
+      expect(
+        () async => await service.polish('hello', preferredProviderId: 'provider_b', skipProviderIds: skipped, onProviderFailed: (_) {}),
+        throwsA(isA<Exception>()),
+      );
+    });
+
+    test('TranscriptionService._callLLMWithFallback throws when no providers configured', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{'llm_providers': '[]'});
+      final service = TranscriptionService();
+      expect(
+        () async => await service.clean('hello', skipProviderIds: <String>{}),
+        throwsA(predicate((e) => e.toString().contains('No LLM provider is configured'))),
+      );
+    });
+  });
+
 }
