@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="app_name">Dictation</string>
     <string name="accessibility_service_label">Dictation bubble</string>
     <string name="accessibility_service_description">Shows a floating microphone bubble when a text field is focused in a supported app, so you can dictate and insert the transcript without leaving that app. The service reads only the focused text field and never stores your screen content or audio.</string>
     <string name="overlay_bubble_content_description">Start dictation</string>

@@ -1,3 +1,6 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -26,21 +29,51 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.dictation_app"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // Unique application ID — change before publishing.
+        applicationId = "com.muddu.dictation_app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (rootProject.file("key.properties").exists()) {
+            val properties = Properties().also {
+                it.load(FileInputStream(rootProject.file("key.properties")))
+            }
+            create("release") {
+                storeFile = rootProject.file(properties.getProperty("storeFile", ""))
+                storePassword = properties.getProperty("storePassword", "")
+                keyAlias = properties.getProperty("keyAlias", "")
+                keyPassword = properties.getProperty("keyPassword", "")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            signingConfig = signingConfigs.findByName("release")
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
+        debug {
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
+    }
+
+    // Require key.properties for release builds only (evaluated when assembling,
+    // not at configuration time, so debug builds keep working without it).
+    tasks.findByName("assembleRelease")?.let { task ->
+        task.doFirst {
+            if (!rootProject.file("key.properties").exists()) {
+                throw GradleException(
+                    "Release signing credentials not found. Create android/key.properties " +
+                    "with storeFile, storePassword, keyAlias, and keyPassword before building a release."
+                )
+            }
         }
     }
 }

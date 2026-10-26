@@ -65,6 +65,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/key.properties
 
 # AI Documentation and Tracking
 Muddu_Dictation_AI_Technical_Documentation.md
