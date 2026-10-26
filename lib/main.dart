@@ -226,6 +226,45 @@ class OverlayBridge {
   }
 }
 
+/// Strips Markdown formatting symbols so only plain text remains.
+///
+/// Removes heading markers (`#`), bold/italic markers (`**`, `*`),
+/// bullet/list markers (`-`, `*`), code fences and backticks, blockquotes,
+/// horizontal rules, and link wrappers. Strips stray hash and quote
+/// characters, then collapses excess whitespace.
+String _stripMarkdown(String text) {
+  if (text.isEmpty) return text;
+  return text
+      // Fenced code blocks
+      .replaceAll(RegExp(r'```+'), '')
+      // Heading markers at the start of a line (#, ##, etc.)
+      .replaceAllMapped(
+          RegExp(r'^[ \t]*#{1,6}[ \t]+', multiLine: true), (_) => '')
+      // Bold and italic markers
+      .replaceAll(RegExp(r'\*\*|\*'), '')
+      // Inline code backticks
+      .replaceAll(RegExp(r'`+'), '')
+      // Blockquote markers at the start of a line
+      .replaceAllMapped(RegExp(r'^[ \t]*>[ \t]?', multiLine: true), (_) => '')
+      // Horizontal rules (--- or *** on their own line)
+      .replaceAllMapped(
+          RegExp(r'^[ \t]*[-*]{3,}[ \t]*$', multiLine: true), (_) => '')
+      // Bullet list markers at the start of a line (- or *)
+      .replaceAllMapped(
+          RegExp(r'^[ \t]*[-*][ \t]+', multiLine: true), (_) => '')
+      // Links: [text](url) -> text
+      .replaceAllMapped(
+          RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m.group(1)!)
+      // Stray formatting characters
+      .replaceAll('#', '')
+      .replaceAll('"', '')
+      .replaceAll("'", '')
+      // Normalize whitespace
+      .replaceAll(RegExp(r'[ \t]+'), ' ')
+      .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+      .trim();
+}
+
 void main() {
   runApp(
     MultiProvider(
@@ -1093,7 +1132,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     if (!enabled) return;
     final target = prefs.getString('auto_copy_target') ?? 'polished';
     final text = target == 'clean' ? noteProvider.cleanedTranscript : noteProvider.polishedTranscript;
-    await Clipboard.setData(ClipboardData(text: text));
+    await Clipboard.setData(ClipboardData(text: _stripMarkdown(text)));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${target == 'clean' ? 'Clean' : 'Polish'} note copied to clipboard 📋')),
@@ -4775,7 +4814,7 @@ class _OverlayDictationPageState extends State<OverlayDictationPage> {
       if (!mounted || _closed) return;
       _results[_selectedFormat] = text;
 
-      await _insertText(text.content.trim());
+      await _insertText(_stripMarkdown(text.content.trim()));
     } catch (e) {
       if (!mounted || _closed) return;
       _finishing = false;
