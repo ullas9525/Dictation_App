@@ -1,18 +1,5 @@
 # KNOWN ISSUES — PARKED BACKLOG
 
-> **STATUS: PARKED. DO NOT FIX AS PART OF THE FLOATING OVERLAY WORK.**
->
-> Findings from a read-only audit of commit `597f183` ("Provider Display",
-> 2026-10-04). They are recorded so they are not forgotten. Fixing them is a
-> separate, later effort. Line numbers refer to the pre-overlay revision and
-> will drift — use the method names and commit hash to relocate them.
-
-**Severity:** `high` = user-visible breakage / data-loss risk; `medium` = rough
-edge or misleading behavior; `low` = cleanup / documentation.
-**Direction** is a suggested fix, deliberately *not* implemented.
-
----
-
 ## Functional
 
 ### KI-01 — Translated transcript tabs are dead code
@@ -76,12 +63,6 @@ edge or misleading behavior; `low` = cleanup / documentation.
 - **Direction:** remember the last working provider for the note, or add a
   short-lived circuit breaker.
 
-### KI-07 — Copy vs auto-copy produce different text
-- **Severity:** low / medium
-- **Evidence:** `NotePage` Copy button strips Markdown from the Polished tab
-  (`[*#_`/\\]`, leading `-`); `HomePage._autoCopyResult` copies the raw value.
-- **What happens:** the clipboard contents depend on how the copy happened.
-- **Direction:** share one "copy-ready text" formatter.
 
 ### KI-08 — Microphone selector is cosmetic
 - **Severity:** medium (misleading)
