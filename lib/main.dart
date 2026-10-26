@@ -1408,7 +1408,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                   key: const ValueKey('upload_button'),
                                   onPressed: _pickAndUploadAudio,
                                   icon: const Icon(Icons.upload_file),
-                                  label: const Text('Upload .wav file'),
+                                  label: const Text('Upload audio'),
                                   style: TextButton.styleFrom(
                                     foregroundColor: theme.textTheme.bodyLarge?.color,
                                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
