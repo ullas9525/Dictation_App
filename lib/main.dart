@@ -4610,16 +4610,11 @@ class _OverlayDictationApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ColorScheme scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFFDC2626),
-      brightness: Brightness.dark,
-    );
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
-        colorScheme: scheme,
         scaffoldBackgroundColor: Colors.transparent,
         snackBarTheme: const SnackBarThemeData(
           behavior: SnackBarBehavior.floating,
@@ -4651,6 +4646,14 @@ class _OverlayDictationPageState extends State<OverlayDictationPage> {
   bool _startingRecording = false;
   bool _finishing = false;
   bool _closed = false;
+
+  // ── Draggable pill ────────────────────────────────────────────────────────
+  // We use bottom/right Positioned anchoring by default so the pill always
+  // appears near the keyboard regardless of what MediaQuery reports in the
+  // translucent overlay activity. Once the user drags, we switch to absolute
+  // top/left so free movement works everywhere on screen.
+  bool _hasBeenDragged = false;
+  Offset _dragPos = Offset.zero; // absolute top/left, only used after drag
 
   @override
   void initState() {
@@ -4855,16 +4858,73 @@ class _OverlayDictationPageState extends State<OverlayDictationPage> {
       },
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        // Keeps the pill above the IME when it is still open underneath.
-        resizeToAvoidBottomInset: true,
-        body: SafeArea(
-          child: Align(
-            alignment: Alignment.centerRight,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: _buildStage(recorder),
-            ),
-          ),
+        resizeToAvoidBottomInset: false,
+        body: LayoutBuilder(
+          builder: (BuildContext ctx, BoxConstraints constraints) {
+            final Widget pill = _buildStage(recorder);
+
+            // Before the user drags: anchor middle-right so the pill starts
+            // at the vertical centre of the screen (like Whisper Flow).
+            // Once dragged it switches to absolute top/left for free movement.
+            if (!_hasBeenDragged) {
+              return Stack(
+                children: <Widget>[
+                  Positioned(
+                    // Middle-right, like Whisper Flow — user can drag anywhere.
+                    right: 16,
+                    top: constraints.maxHeight / 2 - 22,
+                    child: GestureDetector(
+                      onPanStart: (DragStartDetails details) {
+                        // Convert from bottom/right anchor to absolute top/left
+                        // so we can move freely anywhere after the first drag.
+                        final RenderBox? box =
+                            ctx.findRenderObject() as RenderBox?;
+                        if (box != null) {
+                          final Offset local =
+                              box.globalToLocal(details.globalPosition);
+                          setState(() {
+                            _dragPos = Offset(
+                              (local.dx - 80).clamp(
+                                  0, constraints.maxWidth - 20),
+                              (local.dy - 22).clamp(
+                                  0, constraints.maxHeight - 20),
+                            );
+                            _hasBeenDragged = true;
+                          });
+                        }
+                      },
+                      child: pill,
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            // After first drag: absolute top/left positioning.
+            return Stack(
+              children: <Widget>[
+                Positioned(
+                  left: _dragPos.dx.clamp(
+                      0, (constraints.maxWidth - 20).clamp(0, double.infinity)),
+                  top: _dragPos.dy.clamp(
+                      0, (constraints.maxHeight - 20).clamp(0, double.infinity)),
+                  child: GestureDetector(
+                    onPanUpdate: (DragUpdateDetails details) {
+                      setState(() {
+                        _dragPos = Offset(
+                          (_dragPos.dx + details.delta.dx).clamp(
+                              0, constraints.maxWidth - 20),
+                          (_dragPos.dy + details.delta.dy).clamp(
+                              0, constraints.maxHeight - 20),
+                        );
+                      });
+                    },
+                    child: pill,
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -4875,11 +4935,19 @@ class _OverlayDictationPageState extends State<OverlayDictationPage> {
   /// finishes and inserts without any further prompt.
   Widget _pill({required Widget child}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1E24),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white12),
+        // Slightly lighter frosted look — closer to the reference screenshot.
+        color: const Color(0xFF2A2D35),
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x55000000),
+            blurRadius: 16,
+            offset: Offset(0, 4),
+          ),
+        ],
+        border: Border.all(color: Colors.white10, width: 0.8),
       ),
       child: child,
     );
@@ -4909,21 +4977,29 @@ class _OverlayDictationPageState extends State<OverlayDictationPage> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(strokeWidth: 2),
+          // Cancel button — white circle with dark ✕
+          _circleButton(
+            icon: Icons.close,
+            bgColor: Colors.white,
+            iconColor: const Color(0xFF1A1A1A),
+            onTap: _close,
+            tooltip: 'Close',
           ),
           const SizedBox(width: 10),
-          Text(
-            _errorMessage.isEmpty ? 'Opening the microphone…' : _errorMessage,
-            style: const TextStyle(fontSize: 12, color: Colors.white70),
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFB0B0B0)),
+            ),
           ),
-          IconButton(
-            icon: const Icon(Icons.close, size: 20),
-            tooltip: 'Close',
-            onPressed: _close,
+          const SizedBox(width: 8),
+          const Text(
+            'Starting…',
+            style: TextStyle(fontSize: 12, color: Colors.white60),
           ),
+          const SizedBox(width: 8),
         ],
       ),
     );
@@ -4935,26 +5011,26 @@ class _OverlayDictationPageState extends State<OverlayDictationPage> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            icon: const Icon(Icons.close, size: 20),
+          // Cancel — white circle with dark ✕ (matches reference)
+          _circleButton(
+            icon: Icons.close,
+            bgColor: Colors.white,
+            iconColor: const Color(0xFF1A1A1A),
+            onTap: _close,
             tooltip: 'Cancel',
-            onPressed: _close,
           ),
-          _VoiceVisualizer(level: level),
-          // ✓ stops and auto-inserts the default transcript format — no
-          // preview step, no second confirmation.
-          Material(
-            color: const Color(0xFF22C55E),
-            shape: const CircleBorder(),
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: _submit,
-              child: const SizedBox(
-                width: 40,
-                height: 40,
-                child: Icon(Icons.check, size: 22, color: Colors.white),
-              ),
-            ),
+          const SizedBox(width: 8),
+          // Animated waveform dots
+          _WaveformDots(level: level),
+          const SizedBox(width: 8),
+          // ✓ stops and auto-inserts — no preview step, no second confirmation.
+          _circleButton(
+            icon: Icons.check,
+            bgColor: const Color(0xFF6B3FA0), // purple, matching reference
+            iconColor: Colors.white,
+            onTap: _submit,
+            tooltip: 'Done',
+            size: 44,
           ),
         ],
       ),
@@ -4962,14 +5038,32 @@ class _OverlayDictationPageState extends State<OverlayDictationPage> {
   }
 
   Widget _buildProcessing() {
+    // Processing pill mirrors the recording pill: ✕  [pulsing dots]  ✓
+    // but both action buttons are disabled (greyed out) and the dots pulse
+    // with a fixed animation to show activity.
     return _pill(
-      child: SizedBox(
-        width: 44,
-        height: 44,
-        child: const CircularProgressIndicator(
-          strokeWidth: 3,
-          valueColor: AlwaysStoppedAnimation(Color(0xFF22C55E)),
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _circleButton(
+            icon: Icons.close,
+            bgColor: Colors.white24,
+            iconColor: Colors.white38,
+            onTap: null, // disabled during processing
+            tooltip: 'Cancel',
+          ),
+          const SizedBox(width: 8),
+          const _ProcessingDots(),
+          const SizedBox(width: 8),
+          _circleButton(
+            icon: Icons.check,
+            bgColor: const Color(0xFF6B3FA0).withValues(alpha: 0.4),
+            iconColor: Colors.white38,
+            onTap: null, // disabled during processing
+            tooltip: 'Done',
+            size: 44,
+          ),
+        ],
       ),
     );
   }
@@ -4977,83 +5071,217 @@ class _OverlayDictationPageState extends State<OverlayDictationPage> {
   Widget _buildError() {
     return _pill(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(6, 2, 6, 2),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.error_outline,
-                    size: 18, color: Colors.orange),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _errorMessage,
-                    style: const TextStyle(
-                        fontSize: 12, color: Colors.white70),
+        padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 260),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.error_outline, size: 16, color: Colors.orange),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      _errorMessage,
+                      style: const TextStyle(fontSize: 11, color: Colors.white70),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 2),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
+                ],
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  GestureDetector(
+                    onTap: _close,
+                    child: const Text(
+                      'Close',
+                      style: TextStyle(fontSize: 11, color: Colors.white54),
+                    ),
                   ),
-                  onPressed: _close,
-                  child: const Text('Close'),
-                ),
-                const SizedBox(width: 4),
-                FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFFDC2626),
-                    foregroundColor: Colors.white,
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  const SizedBox(width: 12),
+                  GestureDetector(
+                    onTap: _retryAfterError,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.refresh, size: 13, color: Color(0xFF6B3FA0)),
+                        SizedBox(width: 3),
+                        Text(
+                          'Try again',
+                          style: TextStyle(
+                              fontSize: 11, color: Color(0xFF6B3FA0),
+                              fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
                   ),
-                  onPressed: _retryAfterError,
-                  icon: const Icon(Icons.refresh, size: 16),
-                  label: const Text('Try again'),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  /// A labelled circular icon button — used for ✕ cancel and ✓ done.
+  Widget _circleButton({
+    required IconData icon,
+    required Color bgColor,
+    required Color iconColor,
+    required VoidCallback? onTap,
+    required String tooltip,
+    double size = 40,
+  }) {
+    final Widget circle = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: bgColor,
+        shape: BoxShape.circle,
+        boxShadow: onTap != null
+            ? [
+                BoxShadow(
+                  color: bgColor.withValues(alpha: 0.35),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+            : null,
+      ),
+      child: Icon(icon, size: size * 0.48, color: iconColor),
+    );
+    if (onTap == null) return circle;
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: circle,
       ),
     );
   }
 }
 
-/// Five animated bars driven by the recorder's amplitude stream. Small and
-/// dumb on purpose — the timer text next to it carries the exact duration.
-class _VoiceVisualizer extends StatelessWidget {
-  const _VoiceVisualizer({required this.level});
+/// Animated waveform dots (Whisper Flow style) driven by the recorder's
+/// amplitude. Shows 7 dots whose height pulses with the voice level.
+class _WaveformDots extends StatelessWidget {
+  const _WaveformDots({required this.level});
 
   /// 0 (silence) … 1 (loud).
   final double level;
 
-  static const List<double> _shape = <double>[0.40, 0.70, 1.00, 0.70, 0.40];
+  // Shape weights for each dot — centre dot is tallest.
+  static const List<double> _weights = <double>[
+    0.30, 0.55, 0.80, 1.00, 0.80, 0.55, 0.30,
+  ];
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 26,
+      width: 72,
+      height: 28,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: List<Widget>.generate(_shape.length, (int index) {
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: List<Widget>.generate(_weights.length, (int i) {
+          final double h = (4 + 22 * _weights[i] * level).clamp(4.0, 26.0);
           return AnimatedContainer(
-            duration: const Duration(milliseconds: 90),
+            duration: const Duration(milliseconds: 80),
             curve: Curves.easeOut,
-            margin: const EdgeInsets.symmetric(horizontal: 2),
+            margin: const EdgeInsets.symmetric(horizontal: 2.5),
             width: 4,
-            height: 4 + 22 * _shape[index] * level,
+            height: h,
             decoration: BoxDecoration(
-              color: const Color(0xFFEF4444).withValues(alpha: 0.95),
+              // Matches the grey dots visible in the reference screenshot.
+              color: Colors.white.withValues(alpha: 0.75),
               borderRadius: BorderRadius.circular(2),
             ),
+          );
+        }),
+      ),
+    );
+  }
+}
+
+/// Three bouncing dots that indicate AI processing — shown in the processing
+/// pill instead of a bare spinner.
+class _ProcessingDots extends StatefulWidget {
+  const _ProcessingDots();
+
+  @override
+  State<_ProcessingDots> createState() => _ProcessingDotsState();
+}
+
+class _ProcessingDotsState extends State<_ProcessingDots>
+    with TickerProviderStateMixin {
+  late final List<AnimationController> _controllers;
+  late final List<Animation<double>> _animations;
+
+  static const int _dotCount = 7;
+  static const List<double> _baseWeights = <double>[
+    0.30, 0.55, 0.80, 1.00, 0.80, 0.55, 0.30,
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _controllers = List<AnimationController>.generate(_dotCount, (int i) {
+      return AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 600),
+      )..repeat(reverse: true);
+    });
+    // Stagger each dot by 80 ms so they ripple left-to-right.
+    for (int i = 0; i < _dotCount; i++) {
+      Future<void>.delayed(Duration(milliseconds: i * 80), () {
+        if (mounted) _controllers[i].forward();
+      });
+    }
+    _animations = _controllers.map((AnimationController c) {
+      return Tween<double>(begin: 0.15, end: 1.0).animate(
+        CurvedAnimation(parent: c, curve: Curves.easeInOut),
+      );
+    }).toList();
+  }
+
+  @override
+  void dispose() {
+    for (final AnimationController c in _controllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 72,
+      height: 28,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: List<Widget>.generate(_dotCount, (int i) {
+          return AnimatedBuilder(
+            animation: _animations[i],
+            builder: (BuildContext ctx, Widget? _) {
+              final double h =
+                  (4 + 22 * _baseWeights[i] * _animations[i].value)
+                      .clamp(4.0, 26.0);
+              return Container(
+                margin: const EdgeInsets.symmetric(horizontal: 2.5),
+                width: 4,
+                height: h,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.40),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              );
+            },
           );
         }),
       ),
