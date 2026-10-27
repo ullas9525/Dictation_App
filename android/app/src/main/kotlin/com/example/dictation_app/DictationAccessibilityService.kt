@@ -28,6 +28,8 @@ class DictationAccessibilityService : AccessibilityService() {
     companion object {
         private const val PREFS_NAME = "FlutterSharedPreferences"
         private const val PREF_PREFIX = "flutter."
+        private const val PREF_OVERLAY_ENABLED = "${PREF_PREFIX}overlay_enabled"
+        private const val PREF_PRIVACY_MODE = "${PREF_PREFIX}overlay_privacy_mode"
         private const val DEFAULT_TARGET_APPS = "com.whatsapp"
 
         private const val EVALUATE_DEBOUNCE_MS = 90L
@@ -47,6 +49,12 @@ class DictationAccessibilityService : AccessibilityService() {
         fun queueInsert(text: String): Boolean {
             val service = instance ?: return false
             if (text.isEmpty()) return false
+            // Privacy mode / the overlay toggle off: never paste behind the
+            // user's back. The caller falls back to the clipboard.
+            if (service.suspended()) {
+                service.releaseDictationState()
+                return false
+            }
             service.handler.postDelayed({ service.performInsert(text) }, INSERT_DELAY_MS)
             return true
         }
@@ -58,6 +66,10 @@ class DictationAccessibilityService : AccessibilityService() {
          */
         fun requestEvaluate(delayMs: Long = 350L) {
             val service = instance ?: return
+            if (service.suspended()) {
+                service.releaseDictationState()
+                return
+            }
             service.handler.postDelayed({ service.evaluateFocus() }, delayMs)
         }
     }
@@ -67,9 +79,31 @@ class DictationAccessibilityService : AccessibilityService() {
 
     private var lastEditable: AccessibilityNodeInfo? = null
 
+    /** Reacts to Privacy mode / the overlay toggle changing while bound. */
+    private val prefsListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == PREF_PRIVACY_MODE || key == PREF_OVERLAY_ENABLED) {
+                if (suspended()) releaseDictationState()
+                // Re-enabling the overlay does not resurrect a bubble by
+                // itself; the next focus/window event decides, exactly as if
+                // the service had just started.
+            }
+        }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        // The accessibility binding hosts the bubble window; no foreground
+        // service and therefore no persistent notification is needed.
+        BubbleOverlay.attach(this)
+        prefs().registerOnSharedPreferenceChangeListener(prefsListener)
+
+        // Never do any Dictation work while Privacy mode is on, even when the
+        // user (or Android) enables/binds this service in that state.
+        if (suspended()) {
+            releaseDictationState()
+            return
+        }
         // The user may have enabled the service while already sitting in a
         // text field, so look once instead of waiting for the next event.
         handler.postDelayed(evaluateRunnable, 300)
@@ -77,35 +111,57 @@ class DictationAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+
+        // Privacy mode is checked *before* the event is inspected at all: while
+        // it is on, no event is classified, no window is walked, no node is
+        // read and nothing is scheduled. The service stays bound because only
+        // the user can turn it off in Android Settings — see SECURITY.md.
+        if (suspended()) {
+            releaseDictationState()
+            return
+        }
+
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_FOCUSED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOWS_CHANGED,
             -> scheduleEvaluate()
-
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                // Typing fires this constantly. Only re-scan for our own window
-                // (to hide the bubble) or an allow-listed app; keyboard show /
-                // hide is covered by TYPE_WINDOWS_CHANGED above.
-                val eventPackage = event.packageName?.toString()
-                if (eventPackage == packageName ||
-                    (eventPackage != null && isTargetPackage(eventPackage))
-                ) {
-                    scheduleEvaluate()
-                }
-            }
         }
     }
 
     override fun onInterrupt() {
-        OverlayService.hideBubble()
+        BubbleOverlay.hide()
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        OverlayService.hideBubble()
+        try {
+            prefs().unregisterOnSharedPreferenceChangeListener(prefsListener)
+        } catch (_: Exception) {
+            // Already unregistered / process shutting down.
+        }
+        // The accessibility binding is the bubble's host: tearing it down must
+        // also tear down the window (there is no service left to do it).
+        BubbleOverlay.detach()
         if (instance === this) instance = null
         super.onDestroy()
+    }
+
+    /**
+     * True when Dictation must perform **no** accessibility work: explicit
+     * Privacy mode, or the floating bubble toggle is off.
+     */
+    private fun suspended(): Boolean = privacyMode() || !overlayEnabled()
+
+    /**
+     * Drops every pending callback and the cached focused field, and removes
+     * the bubble. Called whenever the service becomes suspended, so nothing
+     * survives Privacy mode except the Android binding itself.
+     */
+    private fun releaseDictationState() {
+        handler.removeCallbacksAndMessages(null)
+        lastEditable = null
+        BubbleOverlay.hide()
     }
 
     private fun scheduleEvaluate() {
@@ -116,7 +172,7 @@ class DictationAccessibilityService : AccessibilityService() {
     /**
      * Decides whether the bubble should be visible right now.
      *
-     * Dictation sheet open (see [OverlayService.isDictationActive]) -> hidden,
+     * Dictation sheet open (see [BubbleOverlay.isDictationActive]) -> hidden,
      * regardless of the focused field or the visible keyboard underneath.
      * Our own app on screen -> hidden (the sheet is already there). Target app
      * with a focused editable field -> shown above the keyboard. Anything else
@@ -124,8 +180,10 @@ class DictationAccessibilityService : AccessibilityService() {
      * because the paste happens after that activity closes.
      */
     private fun evaluateFocus() {
-        if (!overlayEnabled()) {
-            OverlayService.hideBubble()
+        // Privacy mode is an absolute stop: no bubble, no window and no field
+        // scan while it is on.
+        if (suspended()) {
+            releaseDictationState()
             return
         }
 
@@ -135,20 +193,20 @@ class DictationAccessibilityService : AccessibilityService() {
         // the checks below would happily bring the bubble back on top of the
         // visualizer. Never recreate it here; OverlayDictationActivity ends
         // this state in onDestroy and then asks for one more evaluation.
-        if (OverlayService.isDictationActive()) {
-            OverlayService.hideBubble()
+        if (BubbleOverlay.isDictationActive()) {
+            BubbleOverlay.hide()
             return
         }
 
         val activePackage = activePackageName()
         if (activePackage == packageName) {
-            OverlayService.hideBubble()
+            BubbleOverlay.hide()
             return
         }
 
         val node = findFocusedEditable()
         if (node == null) {
-            OverlayService.hideBubble()
+            BubbleOverlay.hide()
             return
         }
 
@@ -157,13 +215,12 @@ class DictationAccessibilityService : AccessibilityService() {
         // the bubble never interrupts screens that are not currently typing.
         val anchor = anchorBottomFor(node)
         if (anchor == null) {
-            OverlayService.hideBubble()
+            BubbleOverlay.hide()
             return
         }
 
         lastEditable = node
-        OverlayService.ensureRunning(this)
-        OverlayService.showBubble(anchor)
+        BubbleOverlay.show(anchor)
     }
 
     private fun activePackageName(): String? = try {
@@ -304,6 +361,11 @@ class DictationAccessibilityService : AccessibilityService() {
     }
 
     private fun performInsert(text: String) {
+        // A pending insert must never outlive the user turning Privacy mode on.
+        if (suspended()) {
+            releaseDictationState()
+            return
+        }
         val node = findFocusedEditable() ?: lastEditable
         if (node == null) {
             showManualPasteHint()
@@ -346,6 +408,10 @@ class DictationAccessibilityService : AccessibilityService() {
         // Verify the paste. If the field is unreadable, assume it worked rather
         // than risk inserting the same text twice via ACTION_SET_TEXT.
         handler.postDelayed({
+            if (suspended()) {
+                releaseDictationState()
+                return@postDelayed
+            }
             val current = findFocusedEditable()
             val after = try {
                 current?.text?.toString()
@@ -418,7 +484,10 @@ class DictationAccessibilityService : AccessibilityService() {
     }
 
     private fun overlayEnabled(): Boolean =
-        prefs().getBoolean("${PREF_PREFIX}overlay_enabled", false)
+        prefs().getBoolean(PREF_OVERLAY_ENABLED, false)
+
+    private fun privacyMode(): Boolean =
+        prefs().getBoolean(PREF_PRIVACY_MODE, false)
 
     private fun targetPackages(): Set<String> {
         val raw = prefs().getString(

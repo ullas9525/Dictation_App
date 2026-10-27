@@ -1,9 +1,7 @@
 package com.example.dictation_app
 
-import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -15,14 +13,15 @@ import io.flutter.plugin.common.MethodChannel
  * Hosts the normal Flutter app and the small settings bridge used by the
  * floating dictation bubble.
  *
- * The bubble itself lives in [OverlayService]; the focused-field detection and
- * paste live in [DictationAccessibilityService].
+ * The bubble window lives in [BubbleOverlay] and is hosted by
+ * [DictationAccessibilityService]; the focused-field detection and the paste
+ * live in that same service. There is no foreground service (and therefore no
+ * persistent notification).
  */
 class MainActivity : FlutterActivity() {
 
     companion object {
         const val OVERLAY_CHANNEL = "dictation_app/overlay"
-        private const val NOTIFICATION_PERMISSION_REQUEST = 1001
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -36,10 +35,6 @@ class MainActivity : FlutterActivity() {
                     "openAccessibilitySettings" -> result.success(openAccessibilitySettings())
                     "startOverlay" -> result.success(startOverlayService())
                     "stopOverlay" -> result.success(stopOverlayService())
-                    "requestNotificationPermission" -> {
-                        requestNotificationPermission()
-                        result.success(true)
-                    }
                     else -> result.notImplemented()
                 }
             }
@@ -48,7 +43,9 @@ class MainActivity : FlutterActivity() {
     private fun overlayStatus(): Map<String, Boolean> = mapOf(
         "canDrawOverlays" to canDrawOverlays(),
         "accessibilityEnabled" to isAccessibilityServiceEnabled(),
-        "serviceRunning" to OverlayService.isRunning,
+        // No foreground service exists any more: "running" means the bubble is
+        // hosted by the accessibility binding and can be shown.
+        "serviceRunning" to BubbleOverlay.isAttached(),
     )
 
     private fun canDrawOverlays(): Boolean =
@@ -96,44 +93,48 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun openAccessibilitySettings(): Boolean = try {
-        startActivity(
-            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+    /**
+     * Opens the system Accessibility settings, where the user can turn the
+     * Dictation service off (Settings → Accessibility → Dictation bubble).
+     *
+     * There is deliberately no way to toggle it from here: Android only lets
+     * the user change this permission, and hiding or auto-disabling it would
+     * be exactly the behaviour banking apps are trying to detect.
+     */
+    private fun openAccessibilitySettings(): Boolean {
+        val intents = listOf(
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:$packageName"),
+            ),
         )
-        true
-    } catch (_: Exception) {
-        false
+        for (intent in intents) {
+            try {
+                startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return true
+            } catch (_: Exception) {
+                // Try the next supported screen.
+            }
+        }
+        return false
     }
 
+    /**
+     * There is no foreground service to start any more. The bubble is hosted by
+     * the accessibility binding, so this only asks it to re-evaluate focus —
+     * that shows the bubble immediately when a supported field is focused.
+     */
     private fun startOverlayService(): Boolean {
         if (!canDrawOverlays()) return false
-        val intent = Intent(this, OverlayService::class.java)
-            .setAction(OverlayService.ACTION_START)
-        return try {
-            startService(intent)
-            true
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun stopOverlayService(): Boolean {
-        stopService(Intent(this, OverlayService::class.java))
-        OverlayService.hideBubble()
+        if (!isAccessibilityServiceEnabled()) return false
+        DictationAccessibilityService.requestEvaluate()
         return true
     }
 
-    private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-        requestPermissions(
-            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-            NOTIFICATION_PERMISSION_REQUEST,
-        )
+    /** Removes the bubble window (the accessibility binding stays connected). */
+    private fun stopOverlayService(): Boolean {
+        BubbleOverlay.hide()
+        return true
     }
 }

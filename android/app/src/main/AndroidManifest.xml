@@ -1,16 +1,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<!-- Microphone: records the dictation audio that is sent to Groq for STT. -->
 <uses-permission android:name="android.permission.RECORD_AUDIO" />
+<!-- INTERNET: direct HTTPS calls to Groq and the user's LLM provider(s). -->
 <uses-permission android:name="android.permission.INTERNET"/>
-<!-- Floating dictation bubble: draw over other apps, keep the bubble alive,
-     and post its foreground-service notification. -->
+<!-- Floating dictation bubble: draw the 44 dp mic bubble over other apps. The
+     window is hosted by the accessibility service below, so the app does not
+     run a foreground service and posts no persistent notification. -->
 <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="@string/app_name"
         android:name="${applicationName}"
-        android:icon="@mipmap/launcher_icon">
+        android:icon="@mipmap/launcher_icon"
+        android:allowBackup="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -52,18 +53,10 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true" />
 
-        <!-- Foreground service that owns the draggable mic bubble. -->
-        <service
-            android:name=".OverlayService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="floating_dictation_bubble" />
-        </service>
-
-        <!-- Sees which editable field is focused in an allow-listed app and
-             performs the paste. The user enables it in Android settings. -->
+        <!-- Sees which editable field is focused in an allow-listed app, hosts
+             the floating bubble window and performs the paste. The user enables
+             it in Android settings. No foreground service or notification is
+             involved. -->
         <service
             android:name=".DictationAccessibilityService"
             android:exported="true"

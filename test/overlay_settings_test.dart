@@ -90,6 +90,9 @@ void main() {
       expect(OverlayPrefs.enabled, 'overlay_enabled');
       expect(OverlayPrefs.targetFormat, 'overlay_target_format');
       expect(OverlayPrefs.targetApps, 'overlay_target_apps');
+      // OverlayService + DictationAccessibilityService read this key before
+      // drawing, starting or launching anything.
+      expect(OverlayPrefs.privacyMode, 'overlay_privacy_mode');
     });
   });
 

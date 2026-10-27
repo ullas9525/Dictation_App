@@ -16,8 +16,10 @@ import 'package:file_picker/file_picker.dart';
 
 // --- Floating dictation bubble (Android) ---
 //
-// The bubble itself is native (OverlayService.kt). Dart supplies the settings,
-// the recording/processing sheet (overlayMain) and the final insert action.
+// The bubble window is native (BubbleOverlay.kt, hosted by the accessibility
+// service). Dart supplies the settings, the recording/processing sheet
+// (overlayMain) and the final insert action. There is no foreground service and
+// therefore no persistent notification.
 
 /// Which transcript the bubble should offer first / paste by default.
 enum TranscriptFormat { raw, clean, polished }
@@ -104,7 +106,40 @@ class OverlayPrefs {
   static const String enabled = 'overlay_enabled';
   static const String targetFormat = 'overlay_target_format';
   static const String targetApps = 'overlay_target_apps';
+
+  /// When true the floating bubble, its service and its activity are all
+  /// blocked. The native services read this same key (with the `flutter.`
+  /// prefix) before drawing, starting or launching anything.
+  static const String privacyMode = 'overlay_privacy_mode';
 }
+
+/// Truthful one-liner about the Dictation accessibility service while Privacy
+/// mode is on.
+///
+/// Android gives an app no supported way to enable or disable its own
+/// accessibility service: only the user can do that from system Settings. So
+/// Privacy mode can stop *using* the service, but it cannot make the service
+/// disappear — and the Settings screen must say so, because an enabled
+/// accessibility service is exactly what banking apps inspect.
+String privacyAccessibilitySummary({
+  required bool supported,
+  required bool accessibilityEnabled,
+}) {
+  if (!supported) return 'Accessibility settings are Android-only.';
+  if (accessibilityEnabled) {
+    return 'Still ON — Android and some banking apps can see it. '
+        'Turn it off in Android Settings to remove it completely.';
+  }
+  return 'Off — the Dictation accessibility service is disabled.';
+}
+
+/// True when Privacy mode is on but the accessibility service is still enabled,
+/// i.e. the one remaining thing a banking app can detect.
+bool privacyAccessibilityStillOn({
+  required bool supported,
+  required bool accessibilityEnabled,
+}) =>
+    supported && accessibilityEnabled;
 
 /// Native permission/service state reported by `dictation_app/overlay`.
 class OverlayStatus {
@@ -163,9 +198,6 @@ class OverlayBridge {
   static Future<bool> startOverlay() => _invokeBool(_settings, 'startOverlay');
 
   static Future<bool> stopOverlay() => _invokeBool(_settings, 'stopOverlay');
-
-  static Future<bool> requestNotificationPermission() =>
-      _invokeBool(_settings, 'requestNotificationPermission');
 
   /// Puts [text] on the clipboard and queues the accessibility paste.
   /// Returns false when the accessibility service is not running.
@@ -2650,6 +2682,7 @@ class _SettingsPageState extends State<SettingsPage>
 
   // --- FLOATING DICTATION BUBBLE ---
   bool _overlayEnabled = false;
+  bool _overlayPrivacyMode = false;
   TranscriptFormat _overlayTargetFormat = TranscriptFormat.polished;
   List<String> _overlayTargetApps = <String>[defaultOverlayTargetApps];
   OverlayStatus _overlayStatus = OverlayStatus.unsupported;
@@ -2691,6 +2724,10 @@ class _SettingsPageState extends State<SettingsPage>
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final providers = await ProviderRegistry.load(prefs);
+    final bool storedPrivacyMode =
+        prefs.getBool(OverlayPrefs.privacyMode) ?? false;
+    final bool storedOverlayEnabled =
+        prefs.getBool(OverlayPrefs.enabled) ?? false;
     if (mounted) {
       setState(() {
         _groqApiKey = prefs.getString('groq_api_key') ?? '';
@@ -2704,7 +2741,10 @@ class _SettingsPageState extends State<SettingsPage>
         _selectedTargetLanguage = prefs.getString('target_language') ?? 'English';
         _autoCopyEnabled = prefs.getBool('auto_copy_enabled') ?? false;
         _autoCopyTarget = prefs.getString('auto_copy_target') ?? 'polished';
-        _overlayEnabled = prefs.getBool(OverlayPrefs.enabled) ?? false;
+        _overlayPrivacyMode = storedPrivacyMode;
+        // Privacy mode wins over a stale "enabled" value written by an older
+        // build: the bubble must never come back while privacy mode is on.
+        _overlayEnabled = storedOverlayEnabled && !storedPrivacyMode;
         _overlayTargetFormat = transcriptFormatFromPref(
             prefs.getString(OverlayPrefs.targetFormat));
         _overlayTargetApps = parseOverlayTargetApps(
@@ -2715,6 +2755,12 @@ class _SettingsPageState extends State<SettingsPage>
         if (!_groqSttModels.contains(_selectedSttModel)) _selectedSttModel = _groqSttModels.first;
         if (!_targetLanguages.contains(_selectedTargetLanguage)) _selectedTargetLanguage = _targetLanguages.first;
       });
+    }
+
+    // Normalise the stale pair on disk so a native service restart (which reads
+    // the prefs directly) also sees the overlay as disabled.
+    if (storedPrivacyMode && storedOverlayEnabled) {
+      await _persistAllSettings();
     }
 
     // The native side owns the real permission/service state; fetch it after
@@ -2745,6 +2791,7 @@ class _SettingsPageState extends State<SettingsPage>
     await prefs.setBool('auto_copy_enabled', _autoCopyEnabled);
     await prefs.setString('auto_copy_target', _autoCopyTarget);
     await prefs.setBool(OverlayPrefs.enabled, _overlayEnabled);
+    await prefs.setBool(OverlayPrefs.privacyMode, _overlayPrivacyMode);
     await prefs.setString(
         OverlayPrefs.targetFormat, _overlayTargetFormat.name);
     await prefs.setString(
@@ -3017,6 +3064,10 @@ class _SettingsPageState extends State<SettingsPage>
               ],
             ),
           ),
+          const SizedBox(height: 24),
+          _buildSectionTitle('Privacy & data'),
+          const SizedBox(height: 8),
+          _buildPrivacyDisclosure(),
         ],
       ),
     );
@@ -3371,15 +3422,35 @@ class _SettingsPageState extends State<SettingsPage>
         children: [
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
+            secondary: Icon(
+              Icons.shield_outlined,
+              color: _overlayPrivacyMode ? Colors.green : Colors.grey,
+            ),
+            title: const Text('Privacy mode'),
+            subtitle: const Text(
+              'Removes the bubble window and blocks the overlay sheet. Turn '
+              'this on before opening banking or other sensitive apps.',
+            ),
+            value: _overlayPrivacyMode,
+            onChanged: _overlayBusy ? null : _setPrivacyMode,
+          ),
+          if (_overlayPrivacyMode)
+            _buildPrivacyModePanel(_overlayStatus),
+          const Divider(height: 8),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
             title: const Text('Enable floating bubble'),
             subtitle: Text(
-              android
-                  ? 'Show a mic bubble when a supported app focuses a text field.'
-                  : 'Android only — the bubble needs overlay and accessibility permissions.',
+              _overlayPrivacyMode
+                  ? 'Turn Privacy mode off to enable the bubble again.'
+                  : android
+                      ? 'Show a mic bubble when a supported app focuses a text field.'
+                      : 'Android only — the bubble needs overlay and accessibility permissions.',
             ),
             value: _overlayEnabled,
-            onChanged:
-                android && !_overlayBusy ? _setOverlayEnabled : null,
+            onChanged: android && !_overlayBusy && !_overlayPrivacyMode
+                ? _setOverlayEnabled
+                : null,
           ),
           if (!android)
             Padding(
@@ -3422,8 +3493,8 @@ class _SettingsPageState extends State<SettingsPage>
                 Expanded(
                   child: Text(
                     _overlayStatus.serviceRunning
-                        ? 'Bubble service is running'
-                        : 'Bubble service is stopped — grant both permissions, then refresh.',
+                        ? 'Floating bubble is ready'
+                        : 'Floating bubble is not active — enable both permissions, then refresh.',
                     style: const TextStyle(fontSize: 13),
                   ),
                 ),
@@ -3435,14 +3506,14 @@ class _SettingsPageState extends State<SettingsPage>
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.refresh),
-                  tooltip: 'Refresh permission status and start the service',
+                  tooltip: 'Refresh permission status and the bubble',
                   onPressed: _overlayBusy ? null : _syncOverlayService,
                 ),
               ],
             ),
             if (_overlayStatus.ready && !_overlayStatus.serviceRunning)
               Text(
-                'Both permissions are granted. Tap refresh to start the bubble service.',
+                'Both permissions are granted. Tap refresh to activate the bubble.',
                 style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
               ),
             const Divider(),
@@ -3562,20 +3633,9 @@ class _SettingsPageState extends State<SettingsPage>
           icon: Icons.accessibility_new,
           title: 'Dictation bubble accessibility service',
           reason:
-              'Required to detect the focused text field and paste the transcript. It never stores screen content.',
+              'Required to detect the focused text field, show the bubble and paste the transcript. It never stores screen content.',
           actionLabel: 'Open accessibility',
           onAction: _openAccessibilitySettings,
-        ),
-        _buildOverlayChecklistTile(
-          icon: Icons.notifications_outlined,
-          title: 'Notifications',
-          reason:
-              'Required for the dictation foreground service on Android 13 and newer.',
-          actionLabel: 'Grant',
-          onAction: () async {
-            await OverlayBridge.requestNotificationPermission();
-            await _refreshOverlayStatus();
-          },
         ),
         const SizedBox(height: 8),
         Text(
@@ -3651,6 +3711,17 @@ class _SettingsPageState extends State<SettingsPage>
   }
 
   Future<void> _setOverlayEnabled(bool value) async {
+    if (value && _overlayPrivacyMode) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'Privacy mode is on. Turn it off before enabling the floating bubble.'),
+          ),
+        );
+      }
+      return;
+    }
     setState(() => _overlayEnabled = value);
     // Persist immediately (not on the 300 ms debounce): the native
     // accessibility service reads this pref on the very next focus event.
@@ -3663,9 +3734,8 @@ class _SettingsPageState extends State<SettingsPage>
       return;
     }
 
-    // Android 13+ shows the foreground-service notification only when this
-    // runtime permission is granted; a denial is not fatal.
-    await OverlayBridge.requestNotificationPermission();
+    // No foreground service and no notification: the bubble is hosted by the
+    // accessibility binding, so only the two permissions matter.
     final OverlayStatus status = await OverlayBridge.getStatus();
     if (!mounted) return;
     setState(() => _overlayStatus = status);
@@ -3679,6 +3749,153 @@ class _SettingsPageState extends State<SettingsPage>
       return;
     }
     await _syncOverlayService();
+  }
+
+  /// Explicit, user-controlled kill switch for the overlay layer.
+  ///
+  /// Turning it on force-disables the floating bubble, persists both prefs
+  /// immediately (the native services read them directly), and stops the
+  /// service so the bubble view and its window are removed. It never touches
+  /// the accessibility service: that is a user-owned system setting, and
+  /// pretending to disable it would be dishonest (and detectable).
+  Future<void> _setPrivacyMode(bool value) async {
+    setState(() {
+      _overlayPrivacyMode = value;
+      if (value) _overlayEnabled = false;
+    });
+    await _persistAllSettings();
+    if (!mounted) return;
+
+    if (!Platform.isAndroid) return;
+    if (value) {
+      await OverlayBridge.stopOverlay();
+    }
+    await _refreshOverlayStatus();
+    if (!mounted || !value) return;
+
+    // Be explicit about the one thing Privacy mode cannot switch off. No
+    // silent toggling: the user is sent to the only screen that can change it.
+    if (_overlayStatus.accessibilityEnabled) {
+      final bool openSettings = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Privacy mode is on'),
+              content: const Text(
+                'The floating bubble and its overlay window are removed, and '
+                'they cannot come back while Privacy mode is on.\n\n'
+                'The Dictation accessibility service is still enabled — Android '
+                'only lets you change that in system settings, and it is what '
+                'banking apps inspect when they look for accessibility services.\n\n'
+                'To remove it completely: open Accessibility settings, find '
+                '"Dictation bubble" and switch it off. Automatic insertion into '
+                'other apps stops until you switch it back on; the normal '
+                'Dictation app keeps working.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Later'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Manage accessibility permission'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (openSettings) await _openAccessibilitySettings();
+    }
+  }
+
+  /// Accurate, actionable state of both capabilities while Privacy mode is on.
+  ///
+  /// Overlay is fully stopped by the app itself. The accessibility service can
+  /// only be turned off by the user, so this panel says whether it is still on
+  /// and links straight to the only screen that can change it.
+  Widget _buildPrivacyModePanel(OverlayStatus status) {
+    final bool accessibilityOn = privacyAccessibilityStillOn(
+      supported: status.supported,
+      accessibilityEnabled: status.accessibilityEnabled,
+    );
+    final MaterialColor accent = accessibilityOn ? Colors.orange : Colors.green;
+
+    Widget row(IconData icon, String title, String body, {Color? color}) {
+      final Color iconColor = color ?? accent.shade700;
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, size: 18, color: iconColor),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text(body,
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: accent.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          row(
+            Icons.check_circle,
+            'Floating bubble and overlay window',
+            'Removed. The bubble window is gone and cannot come back while '
+                'Privacy mode is on.',
+            color: Colors.green.shade700,
+          ),
+          row(
+            accessibilityOn
+                ? Icons.warning_amber_rounded
+                : Icons.check_circle,
+            'Dictation accessibility service',
+            privacyAccessibilitySummary(
+              supported: status.supported,
+              accessibilityEnabled: status.accessibilityEnabled,
+            ),
+            color: accessibilityOn ? Colors.orange.shade800 : Colors.green.shade700,
+          ),
+          const SizedBox(height: 2),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: _openAccessibilitySettings,
+              icon: const Icon(Icons.settings_accessibility, size: 18),
+              label: const Text('Manage accessibility permission'),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'In Android Settings, open Accessibility → Dictation bubble and '
+            'switch it off. Automatic insertion into other apps then stops '
+            '(copy and paste manually instead) until you switch it back on. '
+            'The normal Dictation app keeps recording, transcribing and copying.',
+            style: TextStyle(fontSize: 11.5, color: Colors.grey.shade700),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showOverlaySetupDialog() async {
@@ -3760,11 +3977,14 @@ class _SettingsPageState extends State<SettingsPage>
     });
   }
 
-  /// Starts the foreground service when the feature is on and both permissions
-  /// are granted; stops it when the toggle is off.
+  /// Keeps the host in sync with the toggles: hides the bubble when the
+  /// feature is off or Privacy mode is on (there is no service to start — the
+  /// accessibility binding hosts the window), otherwise asks it to re-evaluate
+  /// focus so the bubble can appear right away.
   Future<void> _syncOverlayService() async {
     if (!Platform.isAndroid) return;
-    if (!_overlayEnabled) {
+    if (!_overlayEnabled || _overlayPrivacyMode) {
+      // Also clears a bubble left behind by a previous build/session.
       await OverlayBridge.stopOverlay();
       await _refreshOverlayStatus();
       return;
@@ -3867,6 +4087,86 @@ class _SettingsPageState extends State<SettingsPage>
     String two(int value) => value.toString().padLeft(2, '0');
     return '${at.year}-${two(at.month)}-${two(at.day)} '
         '${two(at.hour)}:${two(at.minute)}';
+  }
+
+  /// Plain-language disclosure of every capability the overlay feature uses.
+  /// Keep this text in sync with BubbleOverlay / DictationAccessibilityService
+  /// and with TranscriptionService's external calls.
+  Widget _buildPrivacyDisclosure() {
+    Widget item(String title, String body) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title,
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 2),
+            Text(body,
+                style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700)),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade400, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          item(
+            'Why "Display over other apps" is requested',
+            'Only to draw the small microphone bubble above the keyboard. '
+                'Dictation does not capture, record or read your screen.',
+          ),
+          item(
+            'What the accessibility service does',
+            'It watches focus and window changes in the apps you allow, reads '
+                'only the focused editable, non-password field to position the '
+                'bubble and paste the transcript, and keeps that field reference '
+                'in memory. It does not log keystrokes, take screenshots or store '
+                'screen content. With Privacy mode on, it ignores every event '
+                'before inspecting any window or field, and drops the cached '
+                'field — but Android keeps the service enabled until you turn it '
+                'off in system settings.',
+          ),
+          item(
+            'Where your data goes',
+            'Audio is sent to Groq for speech-to-text. The transcript is sent to '
+                'the LLM provider(s) you configured (OpenRouter, Gemini, or a '
+                'custom endpoint) for cleaning, polishing and optional translation. '
+                'There is no analytics or telemetry. API keys stay in this app\'s '
+                'on-device preferences.',
+          ),
+          item(
+            'How to turn it off',
+            'Privacy mode above removes the bubble window and blocks the overlay '
+                'sheet. It cannot turn off the accessibility service — Android only '
+                'allows you to do that. Tap "Manage accessibility permission" (or '
+                'open Android Settings → Accessibility → Dictation bubble) and '
+                'switch the service off; automatic insertion into other apps then '
+                'stops, while the normal Dictation app still records and produces '
+                'notes. You can also revoke "Display over other apps" in Android '
+                'Settings → Apps → Dictation.',
+          ),
+          item(
+            'Banking and sensitive apps',
+            'Dictation cannot guarantee compatibility with banking apps and does '
+                'not try to hide from their security checks. An enabled '
+                'accessibility service is visible to Android and can be flagged '
+                'even when the bubble is gone, so Privacy mode alone may not '
+                'satisfy a banking app. For those apps, also switch the '
+                'accessibility service off, and turn it back on when you need '
+                'cross-app insertion again.',
+          ),
+        ],
+      ),
+    );
   }
 
   /// Provider sheet: connects a brand-new provider (with preset chips) or opens
@@ -4785,7 +5085,7 @@ class BrainPainter extends CustomPainter {
 
 // --- Floating dictation sheet (second Flutter entrypoint) ---
 //
-// Launched by OverlayService when the mic bubble is tapped. It is intentionally
+// Launched by BubbleOverlay when the mic bubble is tapped. It is intentionally
 // separate from the full app: a small bottom sheet that records, runs the
 // existing STT -> Clean -> Polish pipeline, previews all three formats, and
 // hands the chosen text to the accessibility service.
@@ -4866,6 +5166,16 @@ class _OverlayDictationPageState extends State<OverlayDictationPage> {
 
   Future<void> _loadPrefsAndStart() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final bool overlayEnabled = prefs.getBool(OverlayPrefs.enabled) ?? false;
+    final bool privacyMode = prefs.getBool(OverlayPrefs.privacyMode) ?? false;
+
+    // A stale launch (service restart racing Privacy mode) must not start an
+    // invisible recording. Close before the microphone is touched.
+    if (!overlayEnabled || privacyMode) {
+      await _close();
+      return;
+    }
+
     final TranscriptFormat format =
         transcriptFormatFromPref(prefs.getString(OverlayPrefs.targetFormat));
     if (!mounted) return;

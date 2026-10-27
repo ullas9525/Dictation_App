@@ -30,8 +30,11 @@ class OverlayDictationActivity : FlutterActivity() {
 
     private var channel: MethodChannel? = null
 
-    /** Owner token of this instance's dictation claim (see OverlayService). */
+    /** Owner token of this instance's dictation claim (see BubbleOverlay). */
     private var dictationGeneration: Long = -1L
+
+    /** True only when this instance actually claimed the overlay slot. */
+    private var claimed = false
 
     override fun getDartEntrypointFunctionName(): String = "overlayMain"
 
@@ -41,11 +44,26 @@ class OverlayDictationActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Last line of defence: the service checks these prefs before launching,
+        // but a stale intent (or an activity started by another component) must
+        // never show the overlay or start recording.
+        if (BubbleOverlay.isPrivacyMode(this) ||
+            !BubbleOverlay.isOverlayEnabled(this)
+        ) {
+            Log.d(
+                "OverlayDebug",
+                "dictation activity blocked: overlay disabled or privacy mode on",
+            )
+            finish()
+            return
+        }
+
         // Claim the overlay slot for as long as this sheet exists. The service
         // already claims it before launching; claiming again here makes the
         // state survive an activity re-create and gives this instance the token
         // that only it may release.
-        dictationGeneration = OverlayService.beginDictation()
+        dictationGeneration = BubbleOverlay.beginDictation()
+        claimed = true
 
         // ── Keep the keyboard exactly as the user left it ────────────────────
         // A normal activity window takes window focus, becomes the input-method
@@ -130,17 +148,21 @@ class OverlayDictationActivity : FlutterActivity() {
         // gone, so the bubble is allowed to come back. Without this the
         // accessibility service would keep suppressing it forever. The token
         // makes a replaced instance a no-op instead of clearing a live claim.
-        OverlayService.endDictation(dictationGeneration)
-        Log.d(
-            "OverlayDebug",
-            "dictation activity destroyed: visualizer closed " +
-                "(gen=$dictationGeneration, active=${OverlayService.isDictationActive()})",
-        )
+        if (claimed) {
+            BubbleOverlay.endDictation(dictationGeneration)
+            Log.d(
+                "OverlayDebug",
+                "dictation activity destroyed: visualizer closed " +
+                    "(gen=$dictationGeneration, active=${BubbleOverlay.isDictationActive()})",
+            )
+        }
         super.onDestroy()
         // The bubble was hidden when this sheet opened. Ask the accessibility
         // service to bring it back exactly once, after the app underneath is
         // interactive again (unless the focus is gone by then).
-        DictationAccessibilityService.requestEvaluate()
+        if (claimed) {
+            DictationAccessibilityService.requestEvaluate()
+        }
     }
 
     private fun copyToClipboard(text: String) {

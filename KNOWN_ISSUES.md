@@ -162,9 +162,10 @@
 
 ### KI-20 — Accessibility/service behavior is OEM-dependent
 - **Severity:** medium (new overlay feature)
-- **Evidence:** new `DictationAccessibilityService` + `OverlayService`.
+- **Evidence:** new `DictationAccessibilityService` (which now also hosts the
+  bubble via `BubbleOverlay`; there is no foreground service).
 - **What happens:** battery optimizers (Xiaomi/Samsung/etc.) may kill the
-  foreground service or accessibility service; custom keyboards/apps may not
+  accessibility service — and with it the bubble; custom keyboards/apps may not
   expose editable nodes.
 - **Direction:** onboarding checklist + "service running" status + clipboard
   fallback (already the prototype behavior).

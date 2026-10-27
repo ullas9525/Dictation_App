@@ -6,7 +6,7 @@ flutter pub get
 flutter run --release    # run on device
 flutter build apk --release
 flutter analyze          # lint (uses flutter_lints)
-flutter test             # 34 tests: provider registry/fallback + labels + Settings auto-save + overlay settings
+flutter test             # 63 tests: provider registry/fallback + labels + Settings auto-save + overlay settings + privacy mode
 ```
 
 ## Architecture (serverless)
@@ -51,21 +51,27 @@ that records, runs the STT → Clean → Polish pipeline for the Settings' defau
 format, and auto-inserts on ✓ — no preview step.
 
 **Native pieces** (`android/app/src/main/kotlin/com/example/dictation_app/`):
-- `OverlayService.kt` — foreground service (type `specialUse`) that owns the
-  draggable `TYPE_APPLICATION_OVERLAY` bubble. `isRunning` is the status shown in
-  Settings; `showBubble(anchorBottom)` / `hideBubble()` are called by the
-  accessibility service; `ensureRunning()` lets accessibility restart it.
-  It also owns the **dictation-active claim**: `beginDictation()` sets the
-  claim (before launching) and removes the bubble, `endDictation(generation)`
-  releases it, and `isDictationActive()` gates every bubble creation. This is a
-  flag, not focus inference, because the non-focusable sheet leaves input focus
-  (and the visible IME) with the app underneath — deriving "sheet is open" from
+- `BubbleOverlay.kt` — **object**, not a service: it owns the draggable
+  `TYPE_APPLICATION_OVERLAY` bubble window and is hosted by
+  `DictationAccessibilityService`. Because there is no foreground service,
+  **there is no notification at all**. `attach(context)` / `detach()` follow the
+  accessibility binding (detach removes the window when the service is turned
+  off); `show(anchorBottom)` / `hide()` are called by that service. It also owns
+  the **dictation-active claim**: `beginDictation()` sets the claim (before
+  launching) and removes the bubble, `endDictation(generation)` releases it, and
+  `isDictationActive()` gates every bubble creation. This is a flag, not focus
+  inference, because the non-focusable sheet leaves input focus (and the visible
+  IME) with the app underneath — deriving "sheet is open" from
   `rootInActiveWindow` made the bubble pop back over the visualizer.
+  Do not reintroduce a foreground service "just for reliability": that would
+  bring back the persistent notification the user asked to remove. The bubble
+  only needs to exist while a field is focused, and that is exactly when the
+  accessibility binding is alive.
 - `DictationAccessibilityService.kt` — watches focus/window events, finds the focused
   editable **non-password** node in an allow-listed package, hides the bubble in our
   own activity, and anchors the bubble above the IME (`TYPE_INPUT_METHOD` window top).
   With no IME window visible the bubble stays hidden. `evaluateFocus()` bails out
-  (hiding, never showing) while `OverlayService.isDictationActive()`, and
+  (hiding, never showing) while `BubbleOverlay.isDictationActive()`, and
   `requestEvaluate()` is what restores the bubble after the sheet closes.
   `queueInsert(text)` waits
   ~700 ms, focuses the field, tries `ACTION_PASTE`, verifies the text, then falls back
@@ -81,32 +87,59 @@ format, and auto-inserts on ✓ — no preview step.
   hide and reopen on every bubble tap, and FLAG_NOT_FOCUSABLE leaves focus/IME
   with the app underneath while still delivering touch to the pill. Do not add
   `FLAG_ALT_FOCUSABLE_IM` on top of it (that re-requests the IME target), and do
-  not drop NEW_TASK (a Service cannot start an activity without it).
+  not drop NEW_TASK (starting an activity from outside an activity needs it).
 - `MainActivity.kt` — channel `dictation_app/overlay`: `getStatus`,
-  `requestOverlayPermission`, `openAccessibilitySettings`, `startOverlay`,
-  `stopOverlay`, `requestNotificationPermission`.
-- Manifest: `SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`,
-  `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`; services and
-  `OverlayDictationActivity` (`OverlayDialogTheme`, `noHistory`, own task affinity).
-  Accessibility config: view focus / window state / window content / windows changed,
+  `requestOverlayPermission`, `openAccessibilitySettings`, `startOverlay`
+  (asks the accessibility service to re-evaluate focus), `stopOverlay`
+  (`BubbleOverlay.hide()`). `serviceRunning` in `getStatus` now means "bubble host
+  attached" (`BubbleOverlay.isAttached()`), not "foreground service running".
+- Manifest: `SYSTEM_ALERT_WINDOW` only (plus `RECORD_AUDIO`/`INTERNET`); the
+  accessibility service and `OverlayDictationActivity` (`OverlayDialogTheme`,
+  `noHistory`, own task affinity). No `FOREGROUND_SERVICE*`/`POST_NOTIFICATIONS`
+  permission and no `OverlayService`.
+  Accessibility config: view focus / window state / windows changed,
   `canRetrieveWindowContent`, `flagRetrieveInteractiveWindows`.
 
 **Flutter pieces** (all in `lib/main.dart`):
 - `TranscriptFormat` / `transcriptFormatFromPref` / labels (`main.dart:24`).
 - `OverlayPrefs` (`main.dart:104`): `overlay_enabled`, `overlay_target_format`
   (`raw`/`clean`/`polished`), `overlay_target_apps` (comma-separated package names;
-  default `com.whatsapp`; `*` = any app).
+  default `com.whatsapp`; `*` = any app), `overlay_privacy_mode` (the Privacy
+  mode kill switch — see below).
 - `parseOverlayTargetApps` / `overlayTargetAppsValue` / `isValidOverlayTargetApp` /
   `overlayTargetAppLabel` — the only target-list parsers. Empty input falls back to
   WhatsApp; serialisation trims/dedupes and never writes an empty value.
 - `OverlayStatus` + `OverlayBridge` (`main.dart:111` / `main.dart:136`) — tolerant of
   `MissingPluginException` / `PlatformException`; non-Android returns unsupported.
-- Settings section **Floating Dictation Bubble** (`_buildOverlaySection`): enable
-  toggle, overlay/accessibility status rows with grant actions, refresh, default
-  transcript dropdown, target-app chips (WhatsApp, custom packages, `*`), privacy
-  copy. Status refreshes on app resume; enabling starts the foreground service once
-  both permissions exist; disabling stops it. `WidgetsBindingObserver` handles the
-  return from Android Settings.
+- Settings section **Floating Dictation Bubble** (`_buildOverlaySection`): Privacy
+  mode toggle, enable toggle, overlay/accessibility status rows with grant actions,
+  refresh, default transcript dropdown, target-app chips (WhatsApp, custom packages,
+  `*`), privacy copy. Status refreshes on app resume; enabling asks the
+  accessibility host to re-evaluate focus once both permissions exist; disabling
+  hides the bubble. There is no foreground service to start or stop.
+  `WidgetsBindingObserver` handles the return from Android Settings.
+- **Privacy mode** (`overlay_privacy_mode`) is the user-controlled kill switch for
+  banking/sensitive apps: turning it on force-disables `overlay_enabled`, persists
+  both keys immediately, and removes the bubble. The pref is checked natively
+  (`BubbleOverlay.show`/`openDictationActivity`,
+  `DictationAccessibilityService.onAccessibilityEvent`/`queueInsert`/`requestEvaluate`/
+  `performInsert`, `OverlayDictationActivity.onCreate`) and in
+  `OverlayDictationPage._loadPrefsAndStart`, so no bubble, no overlay window and no
+  recording can start while it is on. The accessibility service gates **before**
+  inspecting the event (no window walk, no node read, no scheduling) and a
+  `SharedPreferences` listener calls `releaseDictationState()` (drop pending
+  callbacks + cached field) the moment the pref changes. It deliberately does
+  **not** disable the accessibility service (a user-owned Android setting) and it
+  is not a sensitive-app detector — see `SECURITY.md`.
+- When Privacy mode is on, `_buildPrivacyModePanel` states truthfully whether the
+  accessibility service is **still enabled** (that is what banking apps inspect)
+  and offers **Manage accessibility permission**, which opens
+  `Settings.ACTION_ACCESSIBILITY_SETTINGS` via `OverlayBridge.openAccessibilitySettings`.
+  The same dialog appears right after enabling Privacy mode. Never auto-disable the
+  service and never claim Privacy mode turned it off.
+- Settings section **Privacy & data** (`_buildPrivacyDisclosure`) documents the
+  overlay permission, the accessibility behaviour, where audio/transcripts go, and
+  how to revoke. Keep it in sync with the native code.
 - `overlayMain()` (`main.dart:4574`) + `OverlayDictationPage` (`main.dart:4611`):
   auto-starts recording on open, records with the existing `RecordingProvider`,
   and shows the compact recorder pill: ✕ cancel · `_VoiceVisualizer` (five bars
@@ -120,7 +153,8 @@ format, and auto-inserts on ✓ — no preview step.
   three pref keys without updating `DictationAccessibilityService.kt`.
 - Tests: `test/overlay_settings_test.dart` covers format parsing/labels, target-app
   parsing/serialisation/validation, the native pref-key contract, and
-  `OverlayStatus.ready`.
+  `OverlayStatus.ready`; `test/privacy_mode_test.dart` covers the Privacy mode kill
+  switch (force-off, stale-pair normalisation, disclosure copy).
 - Prototype limitations (OEM battery savers, activity/keyboard quirks, best-effort
   insertion) are listed in `KNOWN_ISSUES.md` under “Overlay feature — prototype
   limitations”. Do not silently fix the parked audit items there.
@@ -171,6 +205,7 @@ format, and auto-inserts on ✓ — no preview step.
 - **`cleanedTranscript`** — now a separate LLM clean call (no longer `== rawTranscript`)
 - **API keys** — one Groq key (STT) plus one key per connected LLM provider; all stored as plain text in `SharedPreferences`
 - **Legacy keys removed on migration**: `nvidia_api_key`, `nvidia_model`, `primary_api` (the registry replaces them)
+- **Security posture is documented in `SECURITY.md`** — permission rationale, the Privacy mode behaviour, why there is *no* automatic sensitive-app detection, and the banking-app limitations. Do not add foreground-app monitoring, package blacklists sold as “banking support”, or anything that hides the accessibility/overlay capabilities from integrity checks. `android:allowBackup="false"` keeps API keys out of cloud backups — do not remove it.
 
 ## Translation feature
 - Toggle + language picker in Settings persist to `SharedPreferences`
