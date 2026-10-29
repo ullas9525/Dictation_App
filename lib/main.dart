@@ -261,8 +261,9 @@ class OverlayBridge {
 ///
 /// Removes heading markers (`#`), bold/italic markers (`**`, `*`),
 /// bullet/list markers (`-`, `*`), code fences and backticks, blockquotes,
-/// horizontal rules, and link wrappers. Strips stray hash and quote
-/// characters, then collapses excess whitespace.
+/// horizontal rules, and link wrappers. Strips stray hash and double-quote
+/// characters (single quotes/apostrophes are preserved), then collapses excess
+/// whitespace.
 String _stripMarkdown(String text) {
   if (text.isEmpty) return text;
   return text
@@ -286,10 +287,9 @@ String _stripMarkdown(String text) {
       // Links: [text](url) -> text
       .replaceAllMapped(
           RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m.group(1)!)
-      // Stray formatting characters
+      // Stray formatting characters (apostrophes are content, not formatting)
       .replaceAll('#', '')
       .replaceAll('"', '')
-      .replaceAll("'", '')
       // Normalize whitespace
       .replaceAll(RegExp(r'[ \t]+'), ' ')
       .replaceAll(RegExp(r'\n{3,}'), '\n\n')
